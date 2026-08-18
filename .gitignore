@@ -1,0 +1,40 @@
+# secrets / live session material — NEVER commit
+cookies*.json
+auth*.json
+auth.map.json
+*.har
+.env
+*.token
+queries.map.json
+
+# run outputs (regenerated; may contain resource IDs)
+astrolabe-*/
+astrolabe-replay-*/
+capture.jsonl
+openapi.json
+
+# python / node / tooling
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+astrolabe-tools/
+.coverage
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# editor / os
+*.swp
+.DS_Store
+
+# scan / surface artifacts (may contain target-specific material)
+scan-*/
+secrets/
+*.recipe.json
+
+# build
+dist/
+build/
+*.egg-info/
