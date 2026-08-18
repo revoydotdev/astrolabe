@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "astrolabe"
+version = "0.1.0"
+description = "Authenticated API / GraphQL / REST / WebSocket surface mapping for arbitrary sites, with capture-driven typed MCP toolpack generation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "revelri" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+keywords = ["graphql", "recon", "mcp", "model-context-protocol", "api", "web"]
+
+dependencies = [
+    # FastMCP 3.4 targets the current stable official Python SDK 1.x line.
+    "mcp>=1.29,<2",
+    "fastmcp>=3.4.5,<4",
+    "curl-cffi>=0.7",
+    "requests>=2.31",
+    "jsonschema>=4.23",
+    "graphql-core>=3.2,<4",
+    "websockets>=15,<18",
+    "h11>=0.16,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/revoydotdev/astrolabe"
+Repository = "https://github.com/revoydotdev/astrolabe"
+
+[project.scripts]
+astrolabe = "astrolabe.cli:main"
+astrolabe-mcp = "astrolabe.mcp_server:main_sync"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.8",
+    "mypy>=1.10",
+    "types-jsonschema>=4.23",
+    "pytest-asyncio>=1.0",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["astrolabe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Measure the whole production package, not a cherry-picked subset.
+addopts = "--cov=astrolabe --cov-fail-under=65 -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N", "ARG"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG001", "ARG002", "ARG005", "E501"]
+# Inherited baseline from the private source tree this was extracted from;
+# every other selected rule (including all of ARG) stays enforced. Shrink
+# this list as debt is paid down; never add newly-introduced codes to it.
+"astrolabe/*" = [
+    "E501", "SIM115", "SIM105", "I001", "F541", "E401", "N806", "E702",
+    "F401", "E741", "E701", "UP031", "F841", "B007",
+]
+
+[[tool.mypy.overrides]]
+# cloakbrowser is a private capture-host driver that lives only on the remote
+# capture host; it is deliberately not installed in this dev/CI environment.
+module = "cloakbrowser"
+ignore_missing_imports = true

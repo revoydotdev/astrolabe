@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://revoydotdev.github.io/astrolabe/schemas/backend-graph-v1.schema.json",
+  "title": "astrolabe backend graph v1",
+  "type": "object",
+  "required": [
+    "schema_version", "schema_dialect", "target", "runs", "evidence", "origins",
+    "endpoints", "operations", "request_templates", "authentication_flows",
+    "credential_scopes", "schemas", "surfaces", "interactions", "event_channels",
+    "proofs", "drifts", "rate_policies"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "schema_dialect": {"const": "https://json-schema.org/draft/2020-12/schema"},
+    "target": {"type": "string", "minLength": 1},
+    "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "evidence": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "origins": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "endpoints": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "operations": {"type": "array", "items": {"$ref": "#/$defs/operation"}},
+    "request_templates": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "authentication_flows": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "credential_scopes": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "schemas": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "surfaces": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "interactions": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "event_channels": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "proofs": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "drifts": {"type": "array", "items": {"$ref": "#/$defs/identified"}},
+    "rate_policies": {"type": "array", "items": {"$ref": "#/$defs/identified"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "identified": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {"id": {"type": "string", "minLength": 1}},
+      "additionalProperties": true
+    },
+    "run": {
+      "allOf": [
+        {"$ref": "#/$defs/identified"},
+        {
+          "type": "object",
+          "required": ["target", "started_at", "completeness", "safety_mode"],
+          "properties": {
+            "target": {"type": "string"},
+            "started_at": {"type": "string"},
+            "completeness": {"enum": ["complete", "partial", "failed"]},
+            "safety_mode": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "operation": {
+      "allOf": [
+        {"$ref": "#/$defs/identified"},
+        {
+          "type": "object",
+          "required": ["semantic_kind", "protocol", "endpoint_ids", "request_template_ids", "lifecycle"],
+          "properties": {
+            "semantic_kind": {"enum": ["query", "mutation", "subscription", "unknown"]},
+            "protocol": {
+              "enum": ["graphql-inline", "graphql-apq", "graphql-x-persisted", "graphql-meta-doc-id", "graphql-vendor-persisted", "rest", "sse", "websocket", "socketio", "grpc-web", "protobuf", "json-rpc", "trpc", "webtransport", "webhook", "service-worker", "offline-queue"]
+            },
+            "endpoint_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "request_template_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "lifecycle": {"type": "object"}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,1 @@
+const request={operationName:"ProductQuery",extensions:{persistedQuery:{version:1,sha256Hash:"0123456789abcdef0123456789abcdef"}},query:`query ProductQuery($id:ID!){product(id:$id){id title}}`,url:"/graphql"};
