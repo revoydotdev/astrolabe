@@ -823,7 +823,10 @@ def main():
             break
 
     # ---- 2. live-DOM evidence (cloakbrowser) ----
-    import cloakbrowser as cb
+    try:
+        from astrolabe.browser import launch_context
+    except ImportError:
+        from browser import launch_context  # type: ignore[import-not-found,no-redef]
 
     kw = dict(
         headless=True,
@@ -835,7 +838,7 @@ def main():
     )
     if args.proxy:
         kw["proxy"] = args.proxy
-    ctx = cb.launch_context(**kw)
+    ctx = launch_context(**kw)
     ctx.set_default_navigation_timeout(45000)
     page = ctx.new_page()
 

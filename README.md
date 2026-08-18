@@ -50,13 +50,36 @@ extension) before running astrolabe.
 
 ```
 uv sync --extra dev
+uv run playwright install chromium
 ```
 
-Requires Python 3.11+. The capture tier itself runs on a separate "capture
-host" through a browser-automation driver (not included here — bring your own,
-or run everything `--local` on one machine if it already has the driver
-installed); the analysis/contract/mcp-gen/replay tiers are pure Python and run
-anywhere.
+Requires Python 3.11+. Plain [Playwright](https://playwright.dev) is a core
+dependency, so `astrolabe map --local example.com` works clone-and-go on any
+machine right after the two commands above — no separate capture host and no
+stealth engine required. The capture tier can also run against a remote
+"capture host" (`--host`, or bare `astrolabe map` when the profile resolves to
+one) through the same browser layer; the analysis/contract/mcp-gen/replay
+tiers are pure Python and run anywhere.
+
+### Browser backend
+
+astrolabe drives the browser through a small pluggable layer
+(`astrolabe/browser.py`) with two backends:
+
+- **playwright** (default, always available) — plain Chromium via Playwright.
+  This is what makes the local demo clone-and-go.
+- **cloakbrowser** (optional) — a stealth, Cloudflare-hardened
+  Playwright-compatible driver for bot-protected targets. Install it with:
+
+  ```
+  pip install astrolabe[stealth]
+  ```
+
+Selection is automatic: `ASTROLABE_BROWSER=auto` (the default) uses
+cloakbrowser when it's installed, otherwise falls back to plain Playwright.
+Set `ASTROLABE_BROWSER=playwright` or `ASTROLABE_BROWSER=cloakbrowser` to pin
+one explicitly; pinning to `cloakbrowser` without the extra installed fails
+fast with an install hint rather than silently falling back.
 
 ## Usage
 

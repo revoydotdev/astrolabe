@@ -20,6 +20,7 @@ from . import analyze as az
 from . import mcpgen as mg
 from . import contract as ct
 from . import profile as prof
+from . import browser as br
 from .artifact import atomic_write_json
 from .security import normalize_host, safe_text
 
@@ -284,6 +285,7 @@ def _require_success(result, label: str):
 CAPTURE_HELPERS = (
     "capture.py",
     "capture_parallel.py",
+    "browser.py",
     "security.py",
     "operation.py",
     "media.py",
@@ -301,6 +303,7 @@ CAPTURE_HELPERS = (
 SITE_RECIPE_STEM = "site_recipe"
 CONTRACT_HELPERS = (
     "contract_verify.py",
+    "browser.py",
     "security.py",
     "operation.py",
     "validation.py",
@@ -582,6 +585,31 @@ def cmd_preflight(a):
     return info
 
 
+def _resolve_capture_backend(hp) -> str:
+    """Which browser backend will drive capture.py for this run.
+
+    Remote capture keeps requiring cloakbrowser exactly as before -- the
+    stealth engine only exists on the capture host's pipx venv, and
+    ASTROLABE_BROWSER is a local-process concern. On a local host, defer to
+    astrolabe.browser.resolve_backend() (env ASTROLABE_BROWSER, default
+    auto), the same resolution capture.py will make in-process."""
+    return br.resolve_backend() if hp.local else "cloakbrowser"
+
+
+def _probe_local_playwright(timeout: int = 30) -> tuple[bool, str]:
+    """Verify plain Playwright + a Chromium binary actually launch on this
+    machine (the same interpreter that will run capture.py locally)."""
+    code = (
+        "from playwright.sync_api import sync_playwright\n"
+        "p = sync_playwright().start()\n"
+        "b = p.chromium.launch(headless=True)\n"
+        "b.close()\n"
+        "p.stop()\n"
+    )
+    r = run([sys.executable, "-c", code], timeout=timeout)
+    return r.returncode == 0, _result_detail(r)
+
+
 @_guaranteed_cleanup
 def cmd_map(a):
     hp = _resolve(a)
@@ -591,12 +619,26 @@ def cmd_map(a):
     out = tempfile.mkdtemp(prefix=".astrolabe-stage-", dir=os.path.dirname(final_out) or ".")
     _track_staging_dir(out, preserve_as=f"{final_out}.partial")
     pf = preflight(hp)
-    if not pf["cloakbrowser"]:
-        raise ConfigurationError("capture host has no cloakbrowser capability")
-    if not pf.get("capture_dependencies", True):
-        raise ConfigurationError(
-            "capture host is missing required graphql-core/jsonschema dependencies"
-        )
+    backend = _resolve_capture_backend(hp)
+    pf["backend"] = backend
+    print(f"  {'backend':14} {backend}")
+    if backend == "cloakbrowser":
+        if not pf["cloakbrowser"]:
+            raise ConfigurationError("capture host has no cloakbrowser capability")
+        if not pf.get("capture_dependencies", True):
+            raise ConfigurationError(
+                "capture host is missing required graphql-core/jsonschema dependencies"
+            )
+    else:
+        ok, detail = _probe_local_playwright()
+        if not ok:
+            raise ConfigurationError(
+                "local playwright backend selected but playwright+chromium is not "
+                "available (pip install -e . && playwright install chromium): " + detail
+            )
+        # capture_dependencies (graphql-core, jsonschema) are astrolabe's own core
+        # deps -- the interpreter running this CLI, which also runs capture.py
+        # locally under the playwright backend, already satisfies them.
     proxy = pf["burp_proxy"] if not a.no_burp else None
     byparr = pf["byparr"]
 
@@ -643,9 +685,11 @@ def cmd_map(a):
         put(hp, cookies_local, f"{rdir}/cookies.json")
         ssh_argv(hp, ["chmod", "600", f"{rdir}/cookies.json"], timeout=15)
 
-    # 3. capture (remote, cloakbrowser venv)
+    # 3. capture (cloakbrowser venv on remote/explicit-stealth; this CLI's own
+    #    interpreter for the local playwright backend)
+    capture_py = hp.cloak_py if backend == "cloakbrowser" else sys.executable
     cap = [
-        hp.cloak_py,
+        capture_py,
         "capture.py",
         "--base-domain",
         dom,
@@ -973,6 +1017,7 @@ def cmd_scan(a):
     put(hp, os.path.join(HERE, "scan.py"), f"{rdir}/scan.py")
     put(hp, os.path.join(HERE, "discovery.py"), f"{rdir}/discovery.py")
     put(hp, os.path.join(HERE, "security.py"), f"{rdir}/security.py")
+    put(hp, os.path.join(HERE, "browser.py"), f"{rdir}/browser.py")
 
     cmd = [
         hp.cloak_py,

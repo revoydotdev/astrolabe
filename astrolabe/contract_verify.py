@@ -9,15 +9,16 @@ for `astrolabe contract --active`. Runs in the cloakbrowser venv on the capture 
 
 from __future__ import annotations
 import argparse, datetime, json, importlib.util, os, urllib.parse as up
-import cloakbrowser as cb
 
 try:
+    from astrolabe.browser import launch_context
     from astrolabe.operation import SemanticKind, semantic_kind, verification_allowed
     from astrolabe.validation import validate_json_schema, validate_response
     from astrolabe.security import atomic_write_json, safe_text, validate_url
     from astrolabe.recipe import load_declarative_recipe, recipe_safety_findings
     from astrolabe.recipe_runtime import SandboxedRecipe
 except ImportError:
+    from browser import launch_context  # type: ignore[import-not-found,no-redef]
     from operation import (  # type: ignore[import-not-found,no-redef]
         SemanticKind,
         semantic_kind,
@@ -111,7 +112,7 @@ def main():
                     worker_path=os.path.join(os.path.dirname(__file__), "recipe_worker.py"),
                 )
 
-    ctx = cb.launch_context(
+    ctx = launch_context(
         headless=True,
         stealth_args=True,
         geoip=True,

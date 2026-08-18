@@ -17,9 +17,8 @@ Per-site recipe (--recipe file.py) may define:
 from __future__ import annotations
 import argparse, atexit, hashlib, json, os, re, signal, sys, time, importlib.util, urllib.request, urllib.parse as up
 from datetime import UTC, datetime
-import cloakbrowser as cb
-
 try:
+    from astrolabe.browser import launch_context
     from astrolabe.graphql_doc import parse_graphql_document
     from astrolabe.media import classify_media
     from astrolabe.operation import graphql_protocol
@@ -34,6 +33,7 @@ try:
         validate_url,
     )
 except ImportError:  # standalone deployment on the capture host
+    from browser import launch_context  # type: ignore[import-not-found,no-redef]
     from graphql_doc import parse_graphql_document  # type: ignore[import-not-found,no-redef]
     from media import classify_media  # type: ignore[import-not-found,no-redef]
     from operation import graphql_protocol  # type: ignore[import-not-found,no-redef]
@@ -774,7 +774,7 @@ def main():
     jf = open(os.path.join(a.outdir, "capture.jsonl"), "w")
 
     kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
-    ctx = cb.launch_context(**kw)
+    ctx = launch_context(**kw)
     ctx.set_default_navigation_timeout(45000)
 
     def enforce_request_budget(route):

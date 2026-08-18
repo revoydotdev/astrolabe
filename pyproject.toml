@@ -29,6 +29,7 @@ dependencies = [
     "graphql-core>=3.2,<4",
     "websockets>=15,<18",
     "h11>=0.16,<1",
+    "playwright>=1.40",
 ]
 
 [project.urls]
@@ -47,6 +48,9 @@ dev = [
     "mypy>=1.10",
     "types-jsonschema>=4.23",
     "pytest-asyncio>=1.0",
+]
+stealth = [
+    "cloakbrowser>=0.5",
 ]
 
 [tool.hatch.metadata]

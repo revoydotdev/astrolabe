@@ -18,7 +18,11 @@ Scope & limits (measured, honest):
 """
 from __future__ import annotations
 import json, urllib.parse as up
-import cloakbrowser as cb
+
+try:
+    from astrolabe.browser import launch_context
+except ImportError:
+    from browser import launch_context  # type: ignore[import-not-found,no-redef]
 
 # fetch() ignores/forbids caller-set cookie/host/user-agent; forward only app auth headers.
 DEFAULT_SAFE = ("authorization", "x-csrf-token", "content-type", "x-requested-with",
@@ -32,8 +36,8 @@ class WarmBrowser:
         self.safe = tuple(h.lower() for h in safe_headers)
         self.marker = gql_marker
         self.catalog = {}  # op-key -> {method, url, headers}
-        self.ctx = cb.launch_context(headless=headless, stealth_args=True, geoip=True,
-                                     locale="en-US", viewport={"width": 1600, "height": 900})
+        self.ctx = launch_context(headless=headless, stealth_args=True, geoip=True,
+                                   locale="en-US", viewport={"width": 1600, "height": 900})
         self.ctx.set_default_navigation_timeout(45000)
         self.ctx.add_cookies(json.load(open(cookies_path)))
         self.page = self.ctx.new_page()
