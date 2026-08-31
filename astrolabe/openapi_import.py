@@ -486,14 +486,14 @@ def _parameters(
         properties[argument] = spec["schema"]
         if spec["required"]:
             required.append(argument)
-    schema: dict[str, Any] = {
+    input_schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "additionalProperties": False,
     }
     if required:
-        schema["required"] = sorted(set(required))
-    return schema, raw_specs, body_media_type
+        input_schema["required"] = sorted(set(required))
+    return input_schema, raw_specs, body_media_type
 
 
 def _default_style(location: str) -> str:

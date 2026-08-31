@@ -22,7 +22,10 @@ import h11
 try:
     from astrolabe.security import resolve_public_addresses, validate_url
 except ImportError:  # standalone deployment on the capture host
-    from security import resolve_public_addresses, validate_url  # type: ignore[no-redef]
+    from security import (  # type: ignore[import-not-found,no-redef]
+        resolve_public_addresses,
+        validate_url,
+    )
 
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _PROTECTED = frozenset({"host", "content-length", "transfer-encoding", "connection"})

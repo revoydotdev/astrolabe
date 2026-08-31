@@ -38,12 +38,12 @@ def inspect_credentials(
     if not isinstance(value, dict):
         raise CredentialBundleError("credential map must be an object")
     if "schema_version" not in value:
-        records = {
+        legacy_records = {
             str(alias): {"headers": record, "metadata": {"legacy": True}}
             for alias, record in value.items()
             if isinstance(record, dict)
         }
-        return None, records, {"schema_version": None, "legacy": True}
+        return None, legacy_records, {"schema_version": None, "legacy": True}
     version = value.get("schema_version")
     if version not in SUPPORTED_CREDENTIAL_SCHEMA_VERSIONS:
         raise CredentialBundleError(f"unsupported credential schema_version {version!r}")
