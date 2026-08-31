@@ -16,6 +16,7 @@ Two proof tiers per op:
 Outputs: contract.json (machine, the contract of record) + contract.md (scorecard).
 Merges a prior contract (`--merge`) for completeness + drift.
 """
+
 from __future__ import annotations
 import argparse, json, os, re, urllib.parse as up, datetime
 from .artifact import atomic_write_json, atomic_write_text
@@ -104,7 +105,8 @@ def build_from_capture(capture_dir):
             for o in r["graphql"]:
                 k = _op_key(r["url"], o, r.get("operation_alias"))
                 seen.setdefault(k, {"status": set(), "n": 0})
-                seen[k]["status"].add(r["status"]); seen[k]["n"] += 1
+                seen[k]["status"].add(r["status"])
+                seen[k]["n"] += 1
                 rs = r.get("resp_shape")
                 # Graph-derived evidence carries `status: None` for anything that never
                 # produced an HTTP response (a WebSocket frame, an aborted navigation).
@@ -182,8 +184,9 @@ def build_from_capture(capture_dir):
             params = PATH_PARAM.findall(path)
             input_schema = {
                 "type": "object",
-                "properties": {p: {"type": "string", "description": f"path parameter {{{p}}}"}
-                               for p in params},
+                "properties": {
+                    p: {"type": "string", "description": f"path parameter {{{p}}}"} for p in params
+                },
             }
             if params:
                 input_schema["required"] = params
@@ -240,11 +243,13 @@ def build_from_capture(capture_dir):
         }
         ops[k]["status"] = classify(ops[k])
 
-    return {"schema_version": SCHEMA_VERSION,
-            "base_domain": base,
-            "endpoints": inv.get("graphql_endpoints", []),
-            "auth_headers": list(inv.get("auth_headers", {})),
-            "operations": ops}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "base_domain": base,
+        "endpoints": inv.get("graphql_endpoints", []),
+        "auth_headers": list(inv.get("auth_headers", {})),
+        "operations": ops,
+    }
 
 
 def upgrade(contract):
@@ -291,15 +296,16 @@ def merge(prior, cur):
     return schema is classified rather than flagged as a single bit, so an added
     optional field reads differently from a removed or retyped one."""
     if not prior:
-        return cur, {"added": list(cur["operations"]), "removed": [], "changed": [],
-                     "breaking": []}
+        return cur, {"added": list(cur["operations"]), "removed": [], "changed": [], "breaking": []}
     prior = upgrade(prior)
     out = {**cur, "operations": dict(prior["operations"])}
     added, changed, breaking = [], [], []
     pri, curr = prior["operations"], cur["operations"]
     for k, co in curr.items():
         if k not in pri:
-            out["operations"][k] = co; added.append(k); continue
+            out["operations"][k] = co
+            added.append(k)
+            continue
         po = pri[k]
         merged = dict(po)
         for fld in ("input_schema", "return_schema"):
@@ -328,8 +334,17 @@ def merge(prior, cur):
         # identifier remains historical; it must never stay current through a
         # union merely because it was seen first.
         for fld in (
-            "operation", "type", "semantic_kind", "protocol", "http_method",
-            "request_url", "request_template", "queryId_or_hash", "transport", "method", "path",
+            "operation",
+            "type",
+            "semantic_kind",
+            "protocol",
+            "http_method",
+            "request_url",
+            "request_template",
+            "queryId_or_hash",
+            "transport",
+            "method",
+            "path",
             "lifecycle_status",
         ):
             if co.get(fld) is not None:
@@ -337,25 +352,31 @@ def merge(prior, cur):
         if po.get("return_schema") and co.get("return_schema"):
             kind = classify_drift(po["return_schema"], co["return_schema"])
             if kind == "breaking":
-                changed.append(k); breaking.append(k)
+                changed.append(k)
+                breaking.append(k)
             elif kind == "additive":
                 changed.append(k)
         # merge proof: freshest observed, keep active from whichever has it
         merged["proof"] = {
-            "observed": co["proof"]["observed"] if co["proof"]["observed"]["ok"] else po["proof"]["observed"],
+            "observed": co["proof"]["observed"]
+            if co["proof"]["observed"]["ok"]
+            else po["proof"]["observed"],
             # Active proof applies to the exact executable identifier. Rotation
             # invalidates the old proof until the new identifier is executed.
-            "active": co["proof"].get("active") or (
-                None if identifier_changed else po["proof"].get("active")
-            ),
+            "active": co["proof"].get("active")
+            or (None if identifier_changed else po["proof"].get("active")),
             "active_history": list(po["proof"].get("active_history") or [])
             + list(co["proof"].get("active_history") or []),
         }
         merged["status"] = classify(merged)
         out["operations"][k] = merged
     removed = [k for k in pri if k not in curr]  # present before, not seen now (possible drift)
-    return out, {"added": added, "removed": removed,
-                 "changed": list(dict.fromkeys(changed)), "breaking": breaking}
+    return out, {
+        "added": added,
+        "removed": removed,
+        "changed": list(dict.fromkeys(changed)),
+        "breaking": breaking,
+    }
 
 
 def classify_drift(before, after):
@@ -429,11 +450,13 @@ def apply_active(contract, verify):
 
 def _coverage_of(ops):
     n = len(ops)
-    return {"total": n,
-            "typed_input": sum(1 for o in ops if (o["input_schema"] or {}).get("properties")),
-            "typed_return": sum(1 for o in ops if o.get("return_schema")),
-            "verified_observed": sum(1 for o in ops if o["proof"]["observed"]["ok"]),
-            "verified_active": sum(1 for o in ops if (o["proof"].get("active") or {}).get("ok"))}
+    return {
+        "total": n,
+        "typed_input": sum(1 for o in ops if (o["input_schema"] or {}).get("properties")),
+        "typed_return": sum(1 for o in ops if o.get("return_schema")),
+        "verified_observed": sum(1 for o in ops if o["proof"]["observed"]["ok"]),
+        "verified_active": sum(1 for o in ops if (o["proof"].get("active") or {}).get("ok")),
+    }
 
 
 def coverage(contract):
@@ -451,39 +474,55 @@ def coverage(contract):
 def render_md(contract, drift=None):
     cov = coverage(contract)
     n = cov["total"] or 1
-    L = [f"# {contract['base_domain']} — executable typed contract\n",
-         f"_Durable contract of record. Endpoints: {', '.join('`'+e+'`' for e in contract['endpoints'])}._\n",
-         "## Coverage scorecard\n",
-         f"| metric | count | % |",
-         "|---|---|---|",
-         f"| operations | {cov['total']} | 100% |",
-         f"| typed input schema | {cov['typed_input']} | {cov['typed_input']*100//n}% |",
-         f"| typed return schema | {cov['typed_return']} | {cov['typed_return']*100//n}% |",
-         f"| **verified — observed** (real 200 captured) | {cov['verified_observed']} | {cov['verified_observed']*100//n}% |",
-         f"| **verified — active** (re-executed by astrolabe) | {cov['verified_active']} | {cov['verified_active']*100//n}% |",
-         ""]
+    L = [
+        f"# {contract['base_domain']} — executable typed contract\n",
+        f"_Durable contract of record. Endpoints: {', '.join('`' + e + '`' for e in contract['endpoints'])}._\n",
+        "## Coverage scorecard\n",
+        f"| metric | count | % |",
+        "|---|---|---|",
+        f"| operations | {cov['total']} | 100% |",
+        f"| typed input schema | {cov['typed_input']} | {cov['typed_input'] * 100 // n}% |",
+        f"| typed return schema | {cov['typed_return']} | {cov['typed_return'] * 100 // n}% |",
+        f"| **verified — observed** (real 200 captured) | {cov['verified_observed']} | {cov['verified_observed'] * 100 // n}% |",
+        f"| **verified — active** (re-executed by astrolabe) | {cov['verified_active']} | {cov['verified_active'] * 100 // n}% |",
+        "",
+    ]
     by_transport = cov.get("by_transport") or {}
     if len(by_transport) > 1:
-        L += ["## Coverage by transport\n",
-              "| transport | ops | typed return | verified observed | verified active |",
-              "|---|---|---|---|---|"]
+        L += [
+            "## Coverage by transport\n",
+            "| transport | ops | typed return | verified observed | verified active |",
+            "|---|---|---|---|---|",
+        ]
         for t, tc in by_transport.items():
-            L.append(f"| {t} | {tc['total']} | {tc['typed_return']} | {tc['verified_observed']} "
-                      f"| {tc['verified_active']} |")
+            L.append(
+                f"| {t} | {tc['total']} | {tc['typed_return']} | {tc['verified_observed']} "
+                f"| {tc['verified_active']} |"
+            )
         L.append("")
     if drift and (drift["added"] or drift["removed"] or drift["changed"]):
-        L += ["## Drift since last contract\n",
-              f"- added: {', '.join('`'+x+'`' for x in drift['added']) or '—'}",
-              f"- removed (not seen this run): {', '.join('`'+x+'`' for x in drift['removed']) or '—'}",
-              f"- return-schema changed: {', '.join('`'+x+'`' for x in drift['changed']) or '—'}",
-              f"- **breaking** (field removed or retyped): "
-              f"{', '.join('`'+x+'`' for x in drift.get('breaking') or []) or '—'}", ""]
-    L += ["## Operations\n", "| op | type | transport | status | in | return |",
-          "|---|---|---|---|---|---|"]
+        L += [
+            "## Drift since last contract\n",
+            f"- added: {', '.join('`' + x + '`' for x in drift['added']) or '—'}",
+            f"- removed (not seen this run): {', '.join('`' + x + '`' for x in drift['removed']) or '—'}",
+            f"- return-schema changed: {', '.join('`' + x + '`' for x in drift['changed']) or '—'}",
+            f"- **breaking** (field removed or retyped): "
+            f"{', '.join('`' + x + '`' for x in drift.get('breaking') or []) or '—'}",
+            "",
+        ]
+    L += [
+        "## Operations\n",
+        "| op | type | transport | status | in | return |",
+        "|---|---|---|---|---|---|",
+    ]
     for k, o in sorted(contract["operations"].items()):
-        st = {"verified-active": "✅ active", "verified-observed": "🟢 observed",
-              "typed-unproven": "🟡 typed", "listed": "⚪ listed",
-              "historical": "◌ historical"}.get(o["status"], o["status"])
+        st = {
+            "verified-active": "✅ active",
+            "verified-observed": "🟢 observed",
+            "typed-unproven": "🟡 typed",
+            "listed": "⚪ listed",
+            "historical": "◌ historical",
+        }.get(o["status"], o["status"])
         ins = "✓" if (o["input_schema"] or {}).get("properties") else "—"
         rets = "✓" if o.get("return_schema") else "—"
         transport = o.get("transport") or "graphql"
@@ -510,12 +549,16 @@ def main():
         os.path.join(os.path.dirname(out) or ".", "contract.md"), render_md(contract, drift)
     )
     cov = coverage(contract)
-    print(f"[contract] {cov['total']} ops | typed-in {cov['typed_input']} | typed-ret {cov['typed_return']} "
-          f"| observed {cov['verified_observed']} | active {cov['verified_active']} -> {out}")
+    print(
+        f"[contract] {cov['total']} ops | typed-in {cov['typed_input']} | typed-ret {cov['typed_return']} "
+        f"| observed {cov['verified_observed']} | active {cov['verified_active']} -> {out}"
+    )
     if drift and (drift["added"] or drift["removed"] or drift["changed"]):
         breaking = drift.get("breaking") or []
-        print(f"[drift] +{len(drift['added'])} -{len(drift['removed'])} ~{len(drift['changed'])}"
-              + (f"  ⚠ {len(breaking)} BREAKING: {', '.join(breaking[:6])}" if breaking else ""))
+        print(
+            f"[drift] +{len(drift['added'])} -{len(drift['removed'])} ~{len(drift['changed'])}"
+            + (f"  ⚠ {len(breaking)} BREAKING: {', '.join(breaking[:6])}" if breaking else "")
+        )
 
 
 if __name__ == "__main__":

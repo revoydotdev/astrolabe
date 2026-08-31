@@ -421,13 +421,7 @@ def test_render_emits_fused_discovery_artifact_and_calibrated_coverage(tmp_path)
     )
     (tmp_path / "schema.json").write_text(
         json.dumps(
-            {
-                "data": {
-                    "__schema": {
-                        "types": [{"name": "Query", "fields": [{"name": "product"}]}]
-                    }
-                }
-            }
+            {"data": {"__schema": {"types": [{"name": "Query", "fields": [{"name": "product"}]}]}}}
         )
     )
     records = [

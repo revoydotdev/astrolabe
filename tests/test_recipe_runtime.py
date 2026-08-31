@@ -25,7 +25,9 @@ def test_sandbox_profile_has_no_host_root_or_network_share(tmp_path: Path) -> No
     assert "--unshare-all" in command
     assert "--clearenv" in command
     assert "--share-net" not in command
-    assert ["--ro-bind", "/", "/"] not in [command[index : index + 3] for index in range(len(command))]
+    assert ["--ro-bind", "/", "/"] not in [
+        command[index : index + 3] for index in range(len(command))
+    ]
     assert "/sandbox/recipe.py" in command
     assert "/sandbox/worker.py" in command
 

@@ -1,4 +1,5 @@
 """Published artifact schemas and Draft 2020-12 validation helpers."""
+
 from __future__ import annotations
 
 import json

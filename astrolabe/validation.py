@@ -1,4 +1,5 @@
 """JSON Schema 2020-12 request/response validation with safe diagnostics."""
+
 from __future__ import annotations
 
 from typing import Any

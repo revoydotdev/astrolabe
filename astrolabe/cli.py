@@ -1141,8 +1141,10 @@ def cmd_contract(a):
             if not declarative and not getattr(a, "allow_inprocess_python_recipe", False):
                 _require_recipe_sandbox(hp)
             remote_recipe = (
-            f"{rdir}/{SITE_RECIPE_STEM}.json" if declarative else f"{rdir}/{SITE_RECIPE_STEM}.py"
-        )
+                f"{rdir}/{SITE_RECIPE_STEM}.json"
+                if declarative
+                else f"{rdir}/{SITE_RECIPE_STEM}.py"
+            )
             put(hp, a.recipe, remote_recipe)
             rec = [
                 "--recipe",
@@ -1344,8 +1346,7 @@ def build_parser():
     m.add_argument("--out")
     m.add_argument(
         "--cookies-file",
-        help="Playwright-format cookie JSON export (bring your own; "
-        "required unless --no-auth)",
+        help="Playwright-format cookie JSON export (bring your own; required unless --no-auth)",
     )
     m.add_argument("--no-auth", action="store_true", help="unauthenticated map (skip cookies)")
     m.add_argument("--no-burp", action="store_true", help="don't proxy through Burp")
@@ -1369,9 +1370,7 @@ def build_parser():
         "replay", parents=[machine], help="browserless TLS-matched high-frequency op replay"
     )
     r.add_argument("domain")
-    r.add_argument(
-        "--op", required=True, help="op-file JSON (alias, query, variables, extract)"
-    )
+    r.add_argument("--op", required=True, help="op-file JSON (alias, query, variables, extract)")
     r.add_argument(
         "--host", default=None, help="pipeline host alias (default: resolved via profile)"
     )
@@ -1382,7 +1381,9 @@ def build_parser():
         help="run the pipeline in-process on THIS machine (it is the host; no ssh/scp)",
     )
     r.add_argument(
-        "--cookies-file", required=True, help="Playwright-format cookie JSON export (bring your own)"
+        "--cookies-file",
+        required=True,
+        help="Playwright-format cookie JSON export (bring your own)",
     )
     r.add_argument(
         "--auth-file",

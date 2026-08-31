@@ -1,4 +1,5 @@
 """Versioned, atomic, recoverable artifact I/O and lineage manifests."""
+
 from __future__ import annotations
 
 import hashlib
@@ -170,11 +171,7 @@ def build_manifest(
     **kwargs: Any,
 ) -> ArtifactManifest:
     root = Path(directory)
-    hashes = {
-        name: sha256_file(root / name)
-        for name in artifact_names
-        if (root / name).is_file()
-    }
+    hashes = {name: sha256_file(root / name) for name in artifact_names if (root / name).is_file()}
     return ArtifactManifest(
         artifact_schema_version=artifact_schema_version,
         artifact_type=artifact_type,

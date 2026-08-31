@@ -113,14 +113,20 @@ def test_request_budgets_reject_before_limit_and_record_reason(capture):
 
 
 def test_request_budget_operation_groups_volatile_ids_and_graphql_names(capture):
-    assert capture.request_budget_operation(
-        "GET", "https://example.com/users/123456/orders/507f1f77bcf86cd799439011"
-    ) == "GET /users/{id}/orders/{id}"
-    assert capture.request_budget_operation(
-        "POST",
-        "https://example.com/graphql",
-        '{"operationName":"CatalogSearch","variables":{"secret":"not-retained"}}',
-    ) == "GRAPHQL CatalogSearch"
+    assert (
+        capture.request_budget_operation(
+            "GET", "https://example.com/users/123456/orders/507f1f77bcf86cd799439011"
+        )
+        == "GET /users/{id}/orders/{id}"
+    )
+    assert (
+        capture.request_budget_operation(
+            "POST",
+            "https://example.com/graphql",
+            '{"operationName":"CatalogSearch","variables":{"secret":"not-retained"}}',
+        )
+        == "GRAPHQL CatalogSearch"
+    )
     assert "not-retained" not in capture.request_budget_operation(
         "POST",
         "https://example.com/graphql",
@@ -205,22 +211,20 @@ def test_sigterm_flushes_a_complete_partial_capture_manifest(tmp_path):
     out = tmp_path / "capture"
     environment = dict(os.environ)
     environment["CAPTURE_TEST_MARKER"] = str(marker)
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [str(fake_modules), str(Path(__file__).parents[1])]
-    )
+    environment["PYTHONPATH"] = os.pathsep.join([str(fake_modules), str(Path(__file__).parents[1])])
     process = subprocess.Popen(
         [
             sys.executable,
             "-m",
             "astrolabe.capture",
-                "--base-domain",
-                "93.184.216.34",
+            "--base-domain",
+            "93.184.216.34",
             "--outdir",
             str(out),
             "--run-id",
             "cancel-test",
-                "--seed",
-                "https://93.184.216.34/slow",
+            "--seed",
+            "https://93.184.216.34/slow",
         ],
         env=environment,
         stdout=subprocess.PIPE,

@@ -159,9 +159,7 @@ def sitemap_urls(
     )
     urls, seen = [], set()
     authorized_hosts = {origin.hostname, *(host.lower() for host in allowed_hosts)}
-    queue = _robots_sitemaps(root, log=log, audit_decision=audit_decision) + [
-        f"{root}/sitemap.xml"
-    ]
+    queue = _robots_sitemaps(root, log=log, audit_decision=audit_decision) + [f"{root}/sitemap.xml"]
     visited_idx = set()
     origin_counts = {root: 1}
     sitemap_budget = max(0, max_requests - 1)  # robots.txt consumed the first request
@@ -1102,7 +1100,9 @@ def main():
 
     if interaction_plan:
         L.append("## Coverage-guided next interactions\n")
-        L.append("Ranked by expected novel evidence per request/time. These are proposals only; run")
+        L.append(
+            "Ranked by expected novel evidence per request/time. These are proposals only; run"
+        )
         L.append("them through a reviewed recipe and the capture safety gates.\n")
         L.append("| action | surface | request cost | expected candidates |")
         L.append("|---|---|---:|---:|")

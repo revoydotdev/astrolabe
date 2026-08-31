@@ -116,8 +116,9 @@ def _money(value, *, required: bool) -> tuple[str | None, str | None]:
     return str(amount), currency
 
 
-def parse_page(payload, *, host: str, endpoint: str, api_version: str,
-               observed_at: str, capture_id: str):
+def parse_page(
+    payload, *, host: str, endpoint: str, api_version: str, observed_at: str, capture_id: str
+):
     if not isinstance(payload, dict):
         raise StorefrontContractError("GraphQL response is not an object")
     if payload.get("errors"):
@@ -161,24 +162,45 @@ def parse_page(payload, *, host: str, endpoint: str, api_version: str,
             available = variant.get("availableForSale")
             if available is not None and not isinstance(available, bool):
                 raise StorefrontContractError("availableForSale must be boolean or null")
-            output.append(Observation(
-                schema_version=1, capture_id=capture_id, observed_at=observed_at,
-                host=host, endpoint=endpoint, api_version=api_version,
-                product_id=product_id, variant_id=variant_id,
-                product_handle=product.get("handle"), product_title=title,
-                variant_title=variant.get("title"), product_type=product.get("productType"),
-                vendor=product.get("vendor"), published_at=product.get("publishedAt"),
-                product_updated_at=product.get("updatedAt"), sku=variant.get("sku"),
-                tags=tuple(str(tag) for tag in (product.get("tags") or [])),
-                price=price, currency=currency, compare_at=compare_at,
-                available=available, qty_available=qty,
-            ))
+            output.append(
+                Observation(
+                    schema_version=1,
+                    capture_id=capture_id,
+                    observed_at=observed_at,
+                    host=host,
+                    endpoint=endpoint,
+                    api_version=api_version,
+                    product_id=product_id,
+                    variant_id=variant_id,
+                    product_handle=product.get("handle"),
+                    product_title=title,
+                    variant_title=variant.get("title"),
+                    product_type=product.get("productType"),
+                    vendor=product.get("vendor"),
+                    published_at=product.get("publishedAt"),
+                    product_updated_at=product.get("updatedAt"),
+                    sku=variant.get("sku"),
+                    tags=tuple(str(tag) for tag in (product.get("tags") or [])),
+                    price=price,
+                    currency=currency,
+                    compare_at=compare_at,
+                    available=available,
+                    qty_available=qty,
+                )
+            )
     return output, bool(page_info.get("hasNextPage")), page_info.get("endCursor"), len(edges)
 
 
 class Collector:
-    def __init__(self, *, api_version: str = API_VERSION, timeout: float = 30,
-                 retries: int = 3, max_pages: int | None = None, session=None):
+    def __init__(
+        self,
+        *,
+        api_version: str = API_VERSION,
+        timeout: float = 30,
+        retries: int = 3,
+        max_pages: int | None = None,
+        session=None,
+    ):
         self.api_version = api_version
         self.timeout = timeout
         self.retries = retries
@@ -201,10 +223,14 @@ class Collector:
                 for attempt in range(self.retries + 1):
                     try:
                         response = await session.post(
-                            endpoint, impersonate="chrome", timeout=self.timeout,
+                            endpoint,
+                            impersonate="chrome",
+                            timeout=self.timeout,
                             headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"},
-                            json={"query": PRODUCTS_QUERY,
-                                  "variables": {"first": PAGE_SIZE, "after": after}},
+                            json={
+                                "query": PRODUCTS_QUERY,
+                                "variables": {"first": PAGE_SIZE, "after": after},
+                            },
                         )
                         if response.status_code != 200:
                             raise StorefrontContractError(f"HTTP {response.status_code}")
@@ -215,8 +241,12 @@ class Collector:
                             raise
                         await asyncio.sleep(min(4, 0.25 * 2**attempt))
                 rows, has_next, end_cursor, product_count = parse_page(
-                    payload, host=host, endpoint=endpoint, api_version=self.api_version,
-                    observed_at=observed_at, capture_id=capture_id,
+                    payload,
+                    host=host,
+                    endpoint=endpoint,
+                    api_version=self.api_version,
+                    observed_at=observed_at,
+                    capture_id=capture_id,
                 )
                 output.extend(rows)
                 pages += 1

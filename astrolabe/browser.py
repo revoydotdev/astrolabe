@@ -32,9 +32,7 @@ def resolve_backend() -> str:
     but not installed."""
     choice = os.environ.get("ASTROLABE_BROWSER", "auto").strip().lower() or "auto"
     if choice not in _VALID_BACKENDS:
-        raise ValueError(
-            f"ASTROLABE_BROWSER={choice!r} is not one of {_VALID_BACKENDS}"
-        )
+        raise ValueError(f"ASTROLABE_BROWSER={choice!r} is not one of {_VALID_BACKENDS}")
     if choice == "playwright":
         return "playwright"
     if choice == "cloakbrowser":
@@ -82,7 +80,13 @@ def _launch_playwright_context(**kw):
     # has no equivalent, so they are dropped rather than translated.
     opts = {
         key: kw[key]
-        for key in ("viewport", "locale", "ignore_https_errors", "record_har_path", "record_har_mode")
+        for key in (
+            "viewport",
+            "locale",
+            "ignore_https_errors",
+            "record_har_path",
+            "record_har_mode",
+        )
         if key in kw
     }
     if kw.get("proxy"):

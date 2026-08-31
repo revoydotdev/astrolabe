@@ -19,6 +19,7 @@ comma or terminated at the wrong paren.
 Scope: the variable-definition block only. Selection sets are not parsed; the
 recovered GraphQL schema (schema.json) remains the source for return types.
 """
+
 from __future__ import annotations
 
 import re
@@ -289,9 +290,7 @@ def parse_variable_definitions(query: str) -> dict[str, VariableDef]:
         parsed = _parse_type(type_src)
         if parsed is None:
             continue
-        out[name] = VariableDef(
-            name=name, type=parsed, has_default=eq != -1, raw_type=type_src
-        )
+        out[name] = VariableDef(name=name, type=parsed, has_default=eq != -1, raw_type=type_src)
     return out
 
 

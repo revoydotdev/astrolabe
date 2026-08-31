@@ -25,6 +25,7 @@ have at least `min_required_samples` observations. One sample is not evidence
 that a field is guaranteed, so with a single observation no `required` is
 emitted at all.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -92,9 +93,7 @@ class ShapeNode:
             }
             if self.object_count >= max(min_required_samples, 1):
                 required = sorted(
-                    name
-                    for name, child in self.props.items()
-                    if child.total == self.object_count
+                    name for name, child in self.props.items() if child.total == self.object_count
                 )
                 if required:
                     schema["required"] = required

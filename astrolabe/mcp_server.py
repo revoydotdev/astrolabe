@@ -266,7 +266,9 @@ class RemoteHTTPProfile:
         for item in self.trusted_hosts:
             candidate = item.strip().rstrip(".").lower()
             if not candidate or any(char in candidate for char in "*/?#@") or ":" in candidate:
-                raise ConfigurationError("trusted hosts must be exact hostnames without ports or wildcards")
+                raise ConfigurationError(
+                    "trusted hosts must be exact hostnames without ports or wildcards"
+                )
             try:
                 candidate = candidate.encode("idna").decode("ascii")
             except UnicodeError as exc:
@@ -288,7 +290,9 @@ class RemoteHTTPProfile:
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(cert, key)
         except (OSError, ssl.SSLError) as exc:
-            raise ConfigurationError(f"TLS certificate/private-key validation failed: {exc}") from exc
+            raise ConfigurationError(
+                f"TLS certificate/private-key validation failed: {exc}"
+            ) from exc
         if not 1 <= self.requests_per_minute <= 100_000:
             raise ConfigurationError("remote requests-per-minute must be between 1 and 100000")
         if not 1 <= self.burst <= self.requests_per_minute:
@@ -371,7 +375,9 @@ class RemoteBoundaryMiddleware:
                 }
             )
             response = JSONResponse(
-                {"error": "rate_limited"}, status_code=429, headers={"Retry-After": str(retry_after)}
+                {"error": "rate_limited"},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
             )
             await response(scope, receive, send)
             return
@@ -524,7 +530,9 @@ class Settings:
 
         ttl_raw = os.environ.get("ASTROLABE_AUTH_TTL_SECONDS")
         auth_ttl_seconds = (
-            _positive_float(ttl_raw, "ASTROLABE_AUTH_TTL_SECONDS", maximum=3600) if ttl_raw else None
+            _positive_float(ttl_raw, "ASTROLABE_AUTH_TTL_SECONDS", maximum=3600)
+            if ttl_raw
+            else None
         )
 
         return cls(
@@ -2022,7 +2030,12 @@ class Runtime:
                         files[name] = (name, value)
                     else:
                         data[name] = value
-                return method, url, {"__astrolabe_multipart__": {"data": data, "files": files}}, None
+                return (
+                    method,
+                    url,
+                    {"__astrolabe_multipart__": {"data": data, "files": files}},
+                    None,
+                )
             headers.setdefault("content-type", "application/x-www-form-urlencoded")
             return method, url, form_fields, None
         if raw_body is not None:
@@ -2431,9 +2444,7 @@ def _graph_summaries(graph: dict[str, Any] | None, known: set[str]) -> list[dict
     return out
 
 
-def create_server(
-    settings: Settings | None = None, *, auth: AuthProvider | None = None
-) -> FastMCP:
+def create_server(settings: Settings | None = None, *, auth: AuthProvider | None = None) -> FastMCP:
     """Build an isolated server instance; no configuration is read during import."""
     settings = settings or Settings.from_env()
     pack = _validate_pack(_read_json(settings.toolpack_path, "toolpack"), settings)
@@ -2899,7 +2910,9 @@ def _parser() -> argparse.ArgumentParser:
     remote.add_argument("--auth-audience")
     remote.add_argument("--auth-jwks-uri")
     remote.add_argument("--auth-public-key", type=Path)
-    remote.add_argument("--auth-algorithm", default="RS256", choices=sorted(_ASYMMETRIC_JWT_ALGORITHMS))
+    remote.add_argument(
+        "--auth-algorithm", default="RS256", choices=sorted(_ASYMMETRIC_JWT_ALGORITHMS)
+    )
     remote.add_argument("--required-scope", action="append", default=[])
     remote.add_argument("--trusted-host", action="append", default=[])
     remote.add_argument("--trusted-origin", action="append", default=[])

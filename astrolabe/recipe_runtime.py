@@ -278,7 +278,9 @@ class SandboxedRecipe:
                 try:
                     if kind == "get":
                         if attribute not in _GETS:
-                            raise RecipeSandboxError(f"recipe property {attribute!r} is not allowed")
+                            raise RecipeSandboxError(
+                                f"recipe property {attribute!r} is not allowed"
+                            )
                         result = getattr(target, str(attribute))
                     elif kind == "call":
                         if attribute not in _CALLS:
@@ -314,9 +316,7 @@ class SandboxedRecipe:
                         raise RecipeSandboxError("recipe sent an unsupported protocol command")
                     self._send({"ok": True, "result": self._encode_result(result, objects)})
                 except BaseException as exc:
-                    self._send(
-                        {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:500]}"}
-                    )
+                    self._send({"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
         finally:
             self.close(force=True)
 

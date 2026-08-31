@@ -22,6 +22,7 @@ Return types are deliberately out of scope: resolving them needs selection-set
 analysis against the operation text, which is a materially bigger job than
 resolving a named input type.
 """
+
 from __future__ import annotations
 
 import json
@@ -73,9 +74,7 @@ class SchemaIndex:
         if not isinstance(types, list):
             return cls({})
         index = {
-            t["name"]: t
-            for t in types
-            if isinstance(t, dict) and isinstance(t.get("name"), str)
+            t["name"]: t for t in types if isinstance(t, dict) and isinstance(t.get("name"), str)
         }
         return cls(index)
 

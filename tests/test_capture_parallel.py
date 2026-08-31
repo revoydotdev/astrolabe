@@ -74,7 +74,9 @@ def test_declarative_surfaces_are_partitioned_without_shared_pages(tmp_path: Pat
 def test_unconstrained_fallback_is_not_imported_for_shard_planning(tmp_path: Path) -> None:
     marker = tmp_path / "must-not-exist"
     recipe = tmp_path / "recipe.py"
-    recipe.write_text(f"open({str(marker)!r}, 'w').write('bad')\nSURFACES=['https://example.com']\n")
+    recipe.write_text(
+        f"open({str(marker)!r}, 'w').write('bad')\nSURFACES=['https://example.com']\n"
+    )
     arguments = [
         "capture.py",
         "--outdir",

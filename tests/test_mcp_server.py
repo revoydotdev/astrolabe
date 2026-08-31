@@ -63,6 +63,7 @@ def _close_runtime_executors(monkeypatch):
     for instance in instances:
         instance.close()
 
+
 DISCOVERY_TOOLS = {
     "search_operations",
     "describe_operation",
@@ -729,7 +730,9 @@ async def test_manifest_count_matches_provider_when_subscription_is_inventoried(
     async with Client(server) as client:
         tools = await asyncio.wait_for(client.list_tools(), timeout=5)
         manifest = json.loads(
-            (await asyncio.wait_for(client.read_resource("astrolabe://manifest"), timeout=5))[0].text
+            (await asyncio.wait_for(client.read_resource("astrolabe://manifest"), timeout=5))[
+                0
+            ].text
         )
 
     assert "jobEvents" not in {tool.name for tool in tools}
@@ -1694,7 +1697,9 @@ async def test_refresh_and_retry_happens_at_most_once_per_credential_generation(
     first = await runtime.execute(runtime.pack["tools"][0], {"page": 1})
     second = await runtime.execute(runtime.pack["tools"][0], {"page": 2})
     assert first["_astrolabe"]["retried"] is True
-    assert second["_astrolabe"]["refresh_skipped"] == ("already attempted for credential generation")
+    assert second["_astrolabe"]["refresh_skipped"] == (
+        "already attempted for credential generation"
+    )
     assert provider.refresh_calls == ["jobSearch"]
     assert calls == 3
 
@@ -2316,9 +2321,7 @@ async def test_remote_http_publishes_metadata_and_rejects_untrusted_headers(
     profile = _test_remote_profile(tmp_path, monkeypatch, pair)
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(
-        Settings(pack_path, allow_anonymous=True), auth=_remote_auth(profile)
-    )
+    server = create_server(Settings(pack_path, allow_anonymous=True), auth=_remote_auth(profile))
     app = server.http_app(
         path=profile.path,
         stateless_http=True,
@@ -2328,25 +2331,28 @@ async def test_remote_http_publishes_metadata_and_rejects_untrusted_headers(
         middleware=[Middleware(RemoteBoundaryMiddleware, profile=profile)],
     )
     transport = httpx.ASGITransport(app=app)
-    async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=transport, base_url=profile.public_url
-    ) as client:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url=profile.public_url) as client,
+    ):
         metadata = await client.get("/.well-known/oauth-protected-resource/mcp")
         assert metadata.status_code == 200
         document = metadata.json()
         assert document["resource"] == profile.audience
-        assert [item.rstrip("/") for item in document["authorization_servers"]] == [
-            profile.issuer
-        ]
+        assert [item.rstrip("/") for item in document["authorization_servers"]] == [profile.issuer]
         assert document["scopes_supported"] == list(profile.required_scopes)
 
-        assert (await client.get(
-            "/.well-known/oauth-protected-resource/mcp", headers={"Host": "evil.example"}
-        )).status_code == 421
-        assert (await client.get(
-            "/.well-known/oauth-protected-resource/mcp",
-            headers={"Origin": "https://evil.example"},
-        )).status_code == 403
+        assert (
+            await client.get(
+                "/.well-known/oauth-protected-resource/mcp", headers={"Host": "evil.example"}
+            )
+        ).status_code == 421
+        assert (
+            await client.get(
+                "/.well-known/oauth-protected-resource/mcp",
+                headers={"Origin": "https://evil.example"},
+            )
+        ).status_code == 403
         assert (await client.post(profile.path, json={})).status_code == 401
 
         valid = pair.create_token(

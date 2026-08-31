@@ -17,6 +17,7 @@ Per-site recipe (--recipe file.py) may define:
 from __future__ import annotations
 import argparse, atexit, hashlib, json, os, re, signal, sys, time, importlib.util, urllib.request, urllib.parse as up
 from datetime import UTC, datetime
+
 try:
     from astrolabe.browser import launch_context
     from astrolabe.graphql_doc import parse_graphql_document
@@ -666,11 +667,7 @@ def main():
     # recipe is loaded up-front (instead of later, before drive()) so the
     # generic auth-header matcher below can be extended by a per-site recipe
     # before the response/request listeners that reference it are ever fired.
-    if (
-        a.recipe
-        and not a.recipe.lower().endswith(".json")
-        and not a.trusted_recipe
-    ):
+    if a.recipe and not a.recipe.lower().endswith(".json") and not a.trusted_recipe:
         raise SystemExit(
             "Python recipes require --trusted-recipe and run in an isolated worker by default; "
             "prefer declarative JSON"
@@ -1292,9 +1289,7 @@ def main():
     # ---- run surfaces (recipe or seeds) ----
     # recipe was already loaded up-front (see auth-matcher setup above).
     surfaces = (
-        list(getattr(recipe, "SURFACES", []))
-        if recipe and not a.skip_recipe_surfaces
-        else []
+        list(getattr(recipe, "SURFACES", [])) if recipe and not a.skip_recipe_surfaces else []
     )
     surfaces += [s for s in a.seeds.split(",") if s.strip()]
     surfaces += list(a.seed)

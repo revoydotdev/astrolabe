@@ -16,6 +16,7 @@ Scope & limits (measured, honest):
     than synthesizing it.
   * For ops without such nonces, in-context fetch with the captured auth headers works.
 """
+
 from __future__ import annotations
 import json, urllib.parse as up
 
@@ -25,19 +26,38 @@ except ImportError:
     from browser import launch_context  # type: ignore[import-not-found,no-redef]
 
 # fetch() ignores/forbids caller-set cookie/host/user-agent; forward only app auth headers.
-DEFAULT_SAFE = ("authorization", "x-csrf-token", "content-type", "x-requested-with",
-                "x-api-tenantid", "x-accept-language",
-                "x-active-user", "x-auth-type", "x-client-language")
+DEFAULT_SAFE = (
+    "authorization",
+    "x-csrf-token",
+    "content-type",
+    "x-requested-with",
+    "x-api-tenantid",
+    "x-accept-language",
+    "x-active-user",
+    "x-auth-type",
+    "x-client-language",
+)
 
 
 class WarmBrowser:
-    def __init__(self, cookies_path, warmup_urls, safe_headers=DEFAULT_SAFE,
-                 gql_marker="/graphql", headless=True):
+    def __init__(
+        self,
+        cookies_path,
+        warmup_urls,
+        safe_headers=DEFAULT_SAFE,
+        gql_marker="/graphql",
+        headless=True,
+    ):
         self.safe = tuple(h.lower() for h in safe_headers)
         self.marker = gql_marker
         self.catalog = {}  # op-key -> {method, url, headers}
-        self.ctx = launch_context(headless=headless, stealth_args=True, geoip=True,
-                                   locale="en-US", viewport={"width": 1600, "height": 900})
+        self.ctx = launch_context(
+            headless=headless,
+            stealth_args=True,
+            geoip=True,
+            locale="en-US",
+            viewport={"width": 1600, "height": 900},
+        )
         self.ctx.set_default_navigation_timeout(45000)
         self.ctx.add_cookies(json.load(open(cookies_path)))
         self.page = self.ctx.new_page()
@@ -59,9 +79,14 @@ class WarmBrowser:
     def _capture(self, r):
         if self.marker in r.url:
             k = self._op_key(r.url)
-            self.catalog.setdefault(k, {
-                "method": r.method, "url": r.url,
-                "headers": {h: v for h, v in r.headers.items() if h.lower() in self.safe}})
+            self.catalog.setdefault(
+                k,
+                {
+                    "method": r.method,
+                    "url": r.url,
+                    "headers": {h: v for h, v in r.headers.items() if h.lower() in self.safe},
+                },
+            )
 
     def execute(self, op_key, url=None, body=None):
         """Re-issue a captured op in-context. Pass url (with new query params) and/or body
@@ -77,8 +102,10 @@ class WarmBrowser:
           let j = null; try { j = JSON.parse(t); } catch(e) {}
           return j !== null ? {_status:r.status, data:j} : {_status:r.status, _len:t.length};
         }"""
-        return self.page.evaluate(js, {"method": c["method"], "headers": c["headers"],
-                                       "url": url or c["url"], "body": body})
+        return self.page.evaluate(
+            js,
+            {"method": c["method"], "headers": c["headers"], "url": url or c["url"], "body": body},
+        )
 
     def close(self):
         try:

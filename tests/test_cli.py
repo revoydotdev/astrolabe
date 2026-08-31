@@ -272,7 +272,9 @@ def test_ssh_argv_remote_quotes_every_argument_once(monkeypatch):
     hp = prof.resolve_profile(host="remote-box", local=False, config_path=None)
     cli.ssh_argv(hp, ["tool", "value;touch /tmp/nope", "$(id)"], cwd="/dev/shm/astrolabe-x")
     remote_command = calls[0][0][2]
-    assert remote_command == ("cd /dev/shm/astrolabe-x && exec tool 'value;touch /tmp/nope' '$(id)'")
+    assert remote_command == (
+        "cd /dev/shm/astrolabe-x && exec tool 'value;touch /tmp/nope' '$(id)'"
+    )
 
 
 def test_deployed_helpers_import_flat():
@@ -305,7 +307,8 @@ def _relative_import_has_flat_fallback(tree) -> bool:
             isinstance(h.type, _ast.Name) and h.type.id == "ImportError" for h in node.handlers
         )
         relative_in_body = any(
-            isinstance(n, _ast.ImportFrom) and n.level for n in _ast.walk(_ast.Module(node.body, []))
+            isinstance(n, _ast.ImportFrom) and n.level
+            for n in _ast.walk(_ast.Module(node.body, []))
         )
         flat_in_handler = any(
             isinstance(n, _ast.ImportFrom) and not n.level
@@ -372,7 +375,9 @@ def test_put_remote_uses_scp(monkeypatch, tmp_path):
     src = tmp_path / "capture.py"
     src.write_text("# helper")
     cli.put(hp, str(src), "/dev/shm/astrolabe-x/capture.py")
-    assert calls == [(["scp", "-q", "--", str(src), "remote-box:/dev/shm/astrolabe-x/capture.py"], {})]
+    assert calls == [
+        (["scp", "-q", "--", str(src), "remote-box:/dev/shm/astrolabe-x/capture.py"], {})
+    ]
 
 
 def test_get_remote_uses_scp(monkeypatch):

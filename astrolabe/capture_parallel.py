@@ -63,9 +63,7 @@ def _recipe_plan(arguments: list[str]) -> tuple[list[str] | None, bool]:
         return [], False
     if recipe_path.lower().endswith(".json"):
         declarative = load_declarative_recipe(recipe_path)
-        return list(declarative.SURFACES), bool(
-            declarative.ACTIONS or declarative.ACTIVE_PROBES
-        )
+        return list(declarative.SURFACES), bool(declarative.ACTIONS or declarative.ACTIVE_PROBES)
     if "--allow-inprocess-python-recipe" in arguments:
         # Do not import an unconstrained fallback merely to plan concurrency.
         return None, True
@@ -96,9 +94,7 @@ def build_shards(arguments: list[str], concurrency: int, shard_root: Path) -> li
             index += 1
     all_surfaces = list(dict.fromkeys([*(recipe_surfaces or []), *seeds]))
     action_seed = (
-        all_surfaces[0]
-        if has_actions and all_surfaces and not unknown_recipe_surfaces
-        else None
+        all_surfaces[0] if has_actions and all_surfaces and not unknown_recipe_surfaces else None
     )
     independent = all_surfaces[1:] if action_seed else all_surfaces
     worker_slots = concurrency - (1 if has_actions else 0)
@@ -297,9 +293,7 @@ def merge_shards(shard_dirs: list[Path], outdir: Path, run_id: str) -> dict[str,
         limits = budgets.get("limits") or {}
         merged_limits = merged["request_budgets"]["limits"]
         for field in ("total", "per_origin", "per_operation"):
-            merged_limits[field] = int(merged_limits.get(field, 0)) + int(
-                limits.get(field, 0)
-            )
+            merged_limits[field] = int(merged_limits.get(field, 0)) + int(limits.get(field, 0))
         merged_limits["rate_limit_reserve"] = max(
             int(merged_limits.get("rate_limit_reserve", 0)),
             int(limits.get("rate_limit_reserve", 0)),
@@ -307,13 +301,9 @@ def merge_shards(shard_dirs: list[Path], outdir: Path, run_id: str) -> dict[str,
         used = budgets.get("used") or {}
         merged["request_budgets"]["used"]["total"] += int(used.get("total", 0))
         _merge_counts(merged["request_budgets"]["used"]["origins"], used.get("origins") or {})
-        _merge_counts(
-            merged["request_budgets"]["used"]["operations"], used.get("operations") or {}
-        )
+        _merge_counts(merged["request_budgets"]["used"]["operations"], used.get("operations") or {})
         merged["request_budgets"]["truncations"].extend(budgets.get("truncations") or [])
-        merged["request_budgets"]["truncation_count"] += int(
-            budgets.get("truncation_count", 0)
-        )
+        merged["request_budgets"]["truncation_count"] += int(budgets.get("truncation_count", 0))
         merged["request_budgets"]["rate_limits"].update(budgets.get("rate_limits") or {})
         merged["surfaces"] = list(
             dict.fromkeys([*merged["surfaces"], *(meta.get("surfaces") or [])])
@@ -371,8 +361,7 @@ def merge_shards(shard_dirs: list[Path], outdir: Path, run_id: str) -> dict[str,
                 har["log"]["entries"] = []
                 har["log"]["pages"] = []
             page_map = {
-                str(page.get("id")): prefix + str(page.get("id"))
-                for page in incoming_pages
+                str(page.get("id")): prefix + str(page.get("id")) for page in incoming_pages
             }
             for page in incoming_pages:
                 page = dict(page)
@@ -384,14 +373,20 @@ def merge_shards(shard_dirs: list[Path], outdir: Path, run_id: str) -> dict[str,
                     entry["pageref"] = page_map[entry["pageref"]]
                 har["log"]["entries"].append(entry)
         auth_path = shard / "auth.headers.json"
-        if auth_path.exists() and (newest_auth is None or auth_path.stat().st_mtime > newest_auth.stat().st_mtime):
+        if auth_path.exists() and (
+            newest_auth is None or auth_path.stat().st_mtime > newest_auth.stat().st_mtime
+        ):
             newest_auth = auth_path
 
     merged["completed_at"] = merged["completed_at"] or datetime.now(UTC).isoformat()
     merged["captured_at"] = merged["completed_at"]
     merged["failure_summary"] = _failure_summary(merged["failures"])
-    atomic_write_text(outdir / "capture.jsonl", "\n".join(capture_lines) + ("\n" if capture_lines else ""))
-    atomic_write_text(outdir / "graphql-names.txt", "\n".join(sorted(name for name in names if name)))
+    atomic_write_text(
+        outdir / "capture.jsonl", "\n".join(capture_lines) + ("\n" if capture_lines else "")
+    )
+    atomic_write_text(
+        outdir / "graphql-names.txt", "\n".join(sorted(name for name in names if name))
+    )
     atomic_write_json(outdir / "meta.json", merged)
     if har is not None:
         atomic_write_json(outdir / "capture.har", har, mode=0o600)
@@ -476,7 +471,9 @@ def main(argv: list[str] | None = None) -> int:
             name: hashlib.sha256((outdir / name).read_bytes()).hexdigest()
             for name in ("capture.jsonl", "meta.json", "graphql-names.txt")
         }
-        atomic_write_json(outdir / "transfer-manifest.json", {"run_id": run_id, "sha256": checksums})
+        atomic_write_json(
+            outdir / "transfer-manifest.json", {"run_id": run_id, "sha256": checksums}
+        )
     for _code, output in results:
         if output:
             print(output[-2000:], end="" if output.endswith("\n") else "\n")

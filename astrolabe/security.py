@@ -3,6 +3,7 @@
 This module deliberately has no third-party dependencies so the standalone browser
 helpers can import it on a capture host.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -128,9 +129,7 @@ def atomic_write_bytes(
         raise
 
 
-def atomic_write_json(
-    path: str | os.PathLike[str], value: Any, *, mode: int = 0o644
-) -> None:
+def atomic_write_json(path: str | os.PathLike[str], value: Any, *, mode: int = 0o644) -> None:
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
     json.loads(payload)
     atomic_write_bytes(path, payload, mode=mode)
@@ -244,7 +243,9 @@ def validate_url(
     host = normalize_host(parsed.hostname)
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError("localhost destination denied")
-    if not any(host_matches(host, allowed, allow_subdomains=allow_subdomains) for allowed in allowed_hosts):
+    if not any(
+        host_matches(host, allowed, allow_subdomains=allow_subdomains) for allowed in allowed_hosts
+    ):
         raise ValueError("destination is outside the allowed origin set")
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("invalid port")
@@ -295,9 +296,7 @@ def structural_shape(
             return truncated("depth_budget")
         if isinstance(item, Mapping):
             keys = list(item)
-            shaped = {
-                str(key): visit(item[key], depth + 1) for key in keys[:max_keys]
-            }
+            shaped = {str(key): visit(item[key], depth + 1) for key in keys[:max_keys]}
             if len(keys) > max_keys:
                 shaped["$astrolabe_truncated"] = {
                     "reason": "key_budget",
@@ -319,7 +318,9 @@ def structural_shape(
                 samples.append(candidate)
                 if len(samples) >= max_array_samples:
                     if len(signatures) < len(item):
-                        samples.append(truncated("array_sample_budget", len(item) - len(signatures)))
+                        samples.append(
+                            truncated("array_sample_budget", len(item) - len(signatures))
+                        )
                     break
             return samples
         if item is None:
@@ -345,7 +346,7 @@ def _decode_bounded(raw: bytes, content_encoding: str, max_body_bytes: int) -> t
 
 
 def _multipart_shape(raw: bytes) -> dict[str, str]:
-    names = re.findall(br'(?i)content-disposition:[^\r\n]*\bname="([^"]{1,200})"', raw)
+    names = re.findall(rb'(?i)content-disposition:[^\r\n]*\bname="([^"]{1,200})"', raw)
     return {name.decode("utf-8", "replace"): "field" for name in names[:200]}
 
 
@@ -381,10 +382,7 @@ def request_metadata(
         if "multipart/form-data" in media_type:
             parsed = _multipart_shape(decoded)
         elif "application/x-www-form-urlencoded" in media_type:
-            parsed = {
-                key: value
-                for key, value in up.parse_qsl(decoded.decode("utf-8", "replace"))
-            }
+            parsed = {key: value for key, value in up.parse_qsl(decoded.decode("utf-8", "replace"))}
     if parsed is not None:
         result["request_shape"] = structural_shape(
             parsed,

@@ -139,9 +139,7 @@ def test_next_manifest_fixture_associates_routes_with_chunks():
             "https://example.test/_next/static/chunks/search-b42.js", "const u='/api/search'"
         ),
     }
-    result = StaticBundleMiner("https://example.test").mine(
-        [manifest_url], resources.__getitem__
-    )
+    result = StaticBundleMiner("https://example.test").mine([manifest_url], resources.__getitem__)
     routes = {item.value: item.metadata["navigation_routes"] for item in result.candidates}
     assert routes["/api/products"] == ["/products"]
     assert routes["/api/search"] == ["/search"]
@@ -174,9 +172,7 @@ def test_static_bundle_miner_follows_vite_chunks_next_manifest_and_source_maps_w
         ),
     }
     miner = StaticBundleMiner("https://example.test", max_resources=10)
-    result = miner.mine(
-        ["/assets/app.js", "/_next/build-manifest.json"], resources.__getitem__
-    )
+    result = miner.mine(["/assets/app.js", "/_next/build-manifest.json"], resources.__getitem__)
 
     assert set(result.discovered_urls) == set(resources)
     assert result.cache_hits == 1
@@ -204,12 +200,8 @@ def test_static_miner_denies_third_party_and_enforces_byte_and_resource_budgets(
 
 
 def test_static_miner_enforces_per_origin_resource_ceiling():
-    miner = StaticBundleMiner(
-        "https://example.test", max_resources=4, max_origin_resources=1
-    )
-    result = miner.mine(
-        ["/a.js", "/b.js"], lambda url: StaticResource(url, "const x='/api/a'")
-    )
+    miner = StaticBundleMiner("https://example.test", max_resources=4, max_origin_resources=1)
+    result = miner.mine(["/a.js", "/b.js"], lambda url: StaticResource(url, "const x='/api/a'"))
     assert result.discovered_urls == ["https://example.test/a.js"]
     assert "origin-resource-count:https://example.test" in result.truncations
 
@@ -236,9 +228,7 @@ def test_interaction_derivation_detects_pagination_get_filters_and_ssr_boundary(
         {
             "https://example.test/items": {
                 "anchors": [{"h": "?page=2", "t": "Next", "same": True}],
-                "forms": [
-                    {"method": "GET", "inputs": [{"name": "category", "type": "select"}]}
-                ],
+                "forms": [{"method": "GET", "inputs": [{"name": "category", "type": "select"}]}],
                 "meta": {"ssr_first_page": True},
             }
         }
@@ -282,13 +272,24 @@ def test_policy_enforces_scope_hours_actions_and_evidence_gated_schema_recovery(
     noon = datetime(2026, 1, 1, 12, tzinfo=UTC)
     evening = datetime(2026, 1, 1, 20, tzinfo=UTC)
     assert policy.authorize(path="/api/items", action="GET", now=noon) == (True, "authorized")
-    assert policy.authorize(path="/api/items", action="GET", now=evening)[1] == "outside-working-hours"
-    assert policy.authorize(path="/outside", action="GET", now=noon)[1] == "outside-authorization-scope"
+    assert (
+        policy.authorize(path="/api/items", action="GET", now=evening)[1] == "outside-working-hours"
+    )
+    assert (
+        policy.authorize(path="/outside", action="GET", now=noon)[1]
+        == "outside-authorization-scope"
+    )
     assert policy.authorize(path="/api/admin/users", action="GET", now=noon)[1] == "prohibited-path"
-    assert policy.authorize(path="/api/items", action="delete item", now=noon)[1] == "prohibited-action"
-    assert policy.authorize(
-        path="/api/graphql", action="recover-schema", now=noon, schema_recovery=True
-    )[1] == "schema-recovery-not-evidence-gated"
+    assert (
+        policy.authorize(path="/api/items", action="delete item", now=noon)[1]
+        == "prohibited-action"
+    )
+    assert (
+        policy.authorize(
+            path="/api/graphql", action="recover-schema", now=noon, schema_recovery=True
+        )[1]
+        == "schema-recovery-not-evidence-gated"
+    )
     assert policy.authorize(
         path="/api/graphql",
         action="recover-schema",

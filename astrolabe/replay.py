@@ -25,6 +25,7 @@ op-file JSON:
   is appended — some sites use the alias to route/log the op server-side; most
   don't need it.
 """
+
 from __future__ import annotations
 import argparse, json, os, time, urllib.parse as up
 from curl_cffi import requests
@@ -49,10 +50,20 @@ except ImportError:
 # a harvested auth map — the auth map is a dict of real request headers as recorded
 # in the credential bundle, and forwarding these would either be ignored, wrong
 # (stale content-length), or fought over with the HTTP client itself.
-HOP_BY_HOP = frozenset({
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailer", "transfer-encoding", "upgrade", "content-length", "host",
-})
+HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+        "host",
+    }
+)
 
 
 def dget(obj, path):
@@ -81,12 +92,18 @@ def dset(obj, path, val):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cookies", required=True)
-    ap.add_argument("--auth", required=True, help="auth.map.json credential bundle (pre-made; see astrolabe.credentials)")
+    ap.add_argument(
+        "--auth",
+        required=True,
+        help="auth.map.json credential bundle (pre-made; see astrolabe.credentials)",
+    )
     ap.add_argument("--op-file", required=True)
     ap.add_argument("--outdir", default=".")
     ap.add_argument("--vary", default="", help="dotpath=v1,v2,... sweep over a variable")
     ap.add_argument("--repeat", type=int, default=1)
-    ap.add_argument("--interval", type=float, default=0.0, help="seconds between calls (rate limit)")
+    ap.add_argument(
+        "--interval", type=float, default=0.0, help="seconds between calls (rate limit)"
+    )
     ap.add_argument("--impersonate", default="chrome")
     a = ap.parse_args()
 
@@ -140,33 +157,59 @@ def main():
             dset(variables, vpath, v)
         t = time.time()
         try:
-            r = s.post(url, headers=headers, data=json.dumps({"query": op["query"], "variables": variables}), timeout=30)
+            r = s.post(
+                url,
+                headers=headers,
+                data=json.dumps({"query": op["query"], "variables": variables}),
+                timeout=30,
+            )
             dt = round((time.time() - t) * 1000)
             try:
                 j = r.json()
             except Exception:
                 j = None
             extracted = dget(j, op["extract"]) if (j and "extract" in op) else None
-            err = (j.get("errors") or [{}])[0].get("message") if isinstance(j, dict) and j.get("errors") else None
+            err = (
+                (j.get("errors") or [{}])[0].get("message")
+                if isinstance(j, dict) and j.get("errors")
+                else None
+            )
             err = safe_text(err) if err else None
-            rec = {"i": i, "vary": v, "status": r.status_code, "ms": dt,
-                   "extracted": extracted, "error": err}
+            rec = {
+                "i": i,
+                "vary": v,
+                "status": r.status_code,
+                "ms": dt,
+                "extracted": extracted,
+                "error": err,
+            }
         except Exception as e:
             rec = {"i": i, "vary": v, "status": None, "error": safe_text(e)}
         results.append(rec)
-        print(f"  [{i:>3}] {str(v):>16}  HTTP {rec.get('status')}  {rec.get('ms','')}ms  "
-              f"{op.get('extract','').split('.')[-1]}={rec.get('extracted')}"
-              + (f"  ERR {rec['error'][:60]}" if rec.get("error") else ""), flush=True)
+        print(
+            f"  [{i:>3}] {str(v):>16}  HTTP {rec.get('status')}  {rec.get('ms', '')}ms  "
+            f"{op.get('extract', '').split('.')[-1]}={rec.get('extracted')}"
+            + (f"  ERR {rec['error'][:60]}" if rec.get("error") else ""),
+            flush=True,
+        )
         if a.interval:
             time.sleep(a.interval)
 
     elapsed = round(time.time() - t0, 2)
     ok = sum(1 for r in results if r.get("status") == 200 and not r.get("error"))
-    out = {"op": op["alias"], "count": len(results), "ok": ok, "elapsed_s": elapsed,
-           "rate_per_s": round(len(results) / elapsed, 1) if elapsed else None, "results": results}
+    out = {
+        "op": op["alias"],
+        "count": len(results),
+        "ok": ok,
+        "elapsed_s": elapsed,
+        "rate_per_s": round(len(results) / elapsed, 1) if elapsed else None,
+        "results": results,
+    }
     p = os.path.join(a.outdir, "replay.json")
     atomic_write_json(p, out)
-    print(f"[replay] {ok}/{len(results)} ok in {elapsed}s ({out['rate_per_s']}/s) -> {p}", flush=True)
+    print(
+        f"[replay] {ok}/{len(results)} ok in {elapsed}s ({out['rate_per_s']}/s) -> {p}", flush=True
+    )
 
 
 if __name__ == "__main__":

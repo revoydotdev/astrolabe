@@ -118,9 +118,7 @@ class Candidate:
             raise ValueError("cannot merge different discovery candidates")
         seen = {(e.source, e.locator, e.detail) for e in self.evidence}
         self.evidence.extend(
-            item
-            for item in other.evidence
-            if (item.source, item.locator, item.detail) not in seen
+            item for item in other.evidence if (item.source, item.locator, item.detail) not in seen
         )
         for key, value in other.metadata.items():
             if key not in self.metadata:
@@ -270,7 +268,9 @@ def pipeline_discovery_corpus(
                         "method": method,
                         "status": record.get("status"),
                         "request_template": {"method": method, "url": url},
-                        "semantic_kind": "query" if method in {"GET", "HEAD", "OPTIONS"} else "unknown",
+                        "semantic_kind": "query"
+                        if method in {"GET", "HEAD", "OPTIONS"}
+                        else "unknown",
                         "safety_proven": method in {"GET", "HEAD", "OPTIONS"},
                     },
                 }
@@ -367,7 +367,16 @@ def pipeline_discovery_corpus(
                 continue
             for method, operation in path_item.items():
                 upper = str(method).upper()
-                if upper not in {"GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"}:
+                if upper not in {
+                    "GET",
+                    "PUT",
+                    "POST",
+                    "DELETE",
+                    "PATCH",
+                    "HEAD",
+                    "OPTIONS",
+                    "TRACE",
+                }:
                     continue
                 operation = operation if isinstance(operation, Mapping) else {}
                 semantic = "query" if upper in {"GET", "HEAD", "OPTIONS"} else "unknown"
@@ -407,10 +416,7 @@ def pipeline_discovery_corpus(
         )
     corpus.add_records(
         DiscoverySource.OPERATOR,
-        (
-            {"kind": "navigation-route", "value": seed, "confidence": 1.0}
-            for seed in operator_seeds
-        ),
+        ({"kind": "navigation-route", "value": seed, "confidence": 1.0} for seed in operator_seeds),
     )
     return corpus
 
@@ -437,9 +443,7 @@ FLAG_RE = re.compile(
     r"[\"']?([A-Za-z_][A-Za-z0-9_.-]{2,80})[\"']?\s*[:=]",
     re.IGNORECASE,
 )
-SERIALIZER_RE = re.compile(
-    r"\b(?:serialize|serializer|toJSON|encodeVariables|buildRequest)\b"
-)
+SERIALIZER_RE = re.compile(r"\b(?:serialize|serializer|toJSON|encodeVariables|buildRequest)\b")
 ROUTE_RE = re.compile(
     r"(?:path|route)[\"']?\s*[:=]\s*[\"'](/[^\"']{1,200})[\"']",
     re.IGNORECASE,
@@ -449,9 +453,7 @@ RELAY_PARAMS_RE = re.compile(
     r"[^}]{0,500}?\bname\s*:\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']"
     r"[^}]{0,500}?\boperationKind\s*:\s*[\"'](query|mutation|subscription)[\"']",
 )
-DYNAMIC_IMPORT_RE = re.compile(
-    r"(?:import\s*\(\s*|[\"'])([^\"'`()\s]+\.js)(?:[\"']?\s*\)|[\"'])"
-)
+DYNAMIC_IMPORT_RE = re.compile(r"(?:import\s*\(\s*|[\"'])([^\"'`()\s]+\.js)(?:[\"']?\s*\)|[\"'])")
 SOURCE_MAP_RE = re.compile(r"//#\s*sourceMappingURL\s*=\s*([^\s]+)")
 
 
@@ -718,7 +720,9 @@ class InteractionCandidate:
     evidence: str = ""
 
 
-def derive_interactions(evidence_by_url: Mapping[str, Mapping[str, Any]]) -> list[InteractionCandidate]:
+def derive_interactions(
+    evidence_by_url: Mapping[str, Mapping[str, Any]],
+) -> list[InteractionCandidate]:
     """Derive safe pagination/filter/scroll candidates from DOM evidence.
 
     This deliberately proposes interactions only; execution still passes through target policy
@@ -862,11 +866,15 @@ def completeness_metrics(
             "ratio": None,
             "denominator": "none; observed inventory is a count, not a completeness claim",
         },
-        "static_candidate_coverage": ratio(len(observed & static_candidates), len(static_candidates)),
+        "static_candidate_coverage": ratio(
+            len(observed & static_candidates), len(static_candidates)
+        ),
         "navigation_coverage": ratio(len(observed & navigation_routes), len(navigation_routes)),
         "spec_coverage": ratio(len(observed & spec_operations), len(spec_operations)),
         "schema_field_coverage": ratio(len(observed & schema_fields), len(schema_fields)),
-        "recipe_action_coverage": ratio(len(completed_actions & recipe_actions), len(recipe_actions)),
+        "recipe_action_coverage": ratio(
+            len(completed_actions & recipe_actions), len(recipe_actions)
+        ),
         "convergence": convergence,
     }
 
@@ -918,9 +926,15 @@ class TargetPolicy:
             )
             if not in_hours:
                 return False, "outside-working-hours"
-        if any(path == prefix or path.startswith(prefix.rstrip("/") + "/") for prefix in self.prohibited_paths):
+        if any(
+            path == prefix or path.startswith(prefix.rstrip("/") + "/")
+            for prefix in self.prohibited_paths
+        ):
             return False, "prohibited-path"
-        if not any(path == prefix or path.startswith(prefix.rstrip("/") + "/") for prefix in self.authorized_paths):
+        if not any(
+            path == prefix or path.startswith(prefix.rstrip("/") + "/")
+            for prefix in self.authorized_paths
+        ):
             return False, "outside-authorization-scope"
         lowered = action.lower()
         if any(term.lower() in lowered for term in self.prohibited_actions):
@@ -981,7 +995,10 @@ class ActionLedger:
         for expected_sequence, stored in enumerate(self.records, 1):
             record = dict(stored)
             digest = record.pop("record_hash", None)
-            if record.get("sequence") != expected_sequence or record.get("previous_hash") != previous:
+            if (
+                record.get("sequence") != expected_sequence
+                or record.get("previous_hash") != previous
+            ):
                 return False
             encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
             if hashlib.sha256(encoded).hexdigest() != digest:

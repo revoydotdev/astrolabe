@@ -1,4 +1,5 @@
 """Migrate legacy capture JSONL to the current structural-only boundary."""
+
 from __future__ import annotations
 
 import argparse
@@ -26,9 +27,10 @@ def sanitize_capture(path: str | os.PathLike[str]) -> int:
     count = 0
     fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output, target.open(
-            encoding="utf-8"
-        ) as source:
+        with (
+            os.fdopen(fd, "w", encoding="utf-8") as output,
+            target.open(encoding="utf-8") as source,
+        ):
             for line in source:
                 if not line.strip():
                     continue

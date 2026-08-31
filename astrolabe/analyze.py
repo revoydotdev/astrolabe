@@ -654,9 +654,7 @@ def render(outdir, recs, meta, *, prior_graph=None):
         if item.kind in {"graphql-operation-name", "persisted-identifier"}
         and has_source(item, static_sources)
     )
-    navigation_routes = {
-        item.value for item in candidates if item.kind == "navigation-route"
-    }
+    navigation_routes = {item.value for item in candidates if item.kind == "navigation-route"}
     observed_routes = set(meta.get("surfaces") or [])
     observed_spec_ops = {
         f"{str(record.get('method') or 'GET').upper()} {up.urlparse(str(record.get('url') or '')).path}"
