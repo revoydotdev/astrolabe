@@ -26,6 +26,7 @@ import sys
 import urllib.parse as up
 from typing import Any
 
+from .attestation import attestation_requirement
 from .gqlschema import SchemaIndex
 from .artifact import atomic_write_json
 from .ir import evidence_records_from_graph, inventory_from_graph, load_graph, stable_id
@@ -285,6 +286,64 @@ def load_contract_proof(capture_dir: str) -> dict[str, str]:
         for k, v in ops.items()
         if isinstance(v, dict) and isinstance(v.get("status"), str)
     }
+
+
+def load_active_verification(capture_dir: str) -> dict[str, dict[str, Any]]:
+    """Per-operation results of actually re-executing operations against the target."""
+    path = os.path.join(capture_dir, "active-verification.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            loaded = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(loaded, list):
+        return {}
+    results = {}
+    for item in loaded:
+        if isinstance(item, dict) and isinstance(item.get("operation"), str):
+            results[item["operation"]] = item
+    return results
+
+
+def apply_replay_gate(
+    tools: list[dict[str, Any]],
+    verification: dict[str, dict[str, Any]],
+    *,
+    require_proof: bool = False,
+    attestation_reason: str | None = None,
+) -> None:
+    """Let replay decide exposure, so a tool that cannot run is not offered as one.
+
+    Observing a request succeed in a browser does not establish that astrolabe can
+    reproduce it: the client may sign or otherwise compute part of the request. A
+    recorded failure is therefore disqualifying on its own. An operation nobody tried
+    is only demoted under `require_proof`, because absence of an attempt is not
+    evidence of failure.
+    """
+    for tool in tools:
+        if not tool.get("exposed"):
+            continue
+        result = verification.get(tool.get("name", ""))
+        if result is None:
+            if require_proof:
+                tool["exposed"] = False
+                tool["reason"] = "no active verification proof; --require-active-proof is set"
+                tool["proof_status"] = "unverified"
+            continue
+        if result.get("ok") is True:
+            tool["proof_status"] = "verified-active"
+            continue
+        detail = result.get("error_code") or (result.get("metadata") or {}).get("http_status")
+        reason = (
+            f"failed active verification ({detail})" if detail else "failed active verification"
+        )
+        if attestation_reason:
+            reason = f"{reason}; {attestation_reason}"
+        tool["exposed"] = False
+        tool["reason"] = reason
+        tool["proof_status"] = "replay-failed"
 
 
 def _read_contract(capture_dir: str) -> dict[str, Any]:
@@ -715,6 +774,7 @@ def build_pack(
     include_mutations: bool = False,
     noise_pattern: str | None = None,
     read_pattern: str | None = None,
+    require_active_proof: bool = False,
 ) -> dict[str, Any]:
     graph_path = os.path.join(capture_dir, "graph.json")
     inv_path = os.path.join(capture_dir, "endpoints.json")
@@ -776,6 +836,13 @@ def build_pack(
         proof=load_contract_proof(capture_dir),
     )
     tools += build_rest_tools(inv, rest_returns, noise, include_mutations, taken, read_re)
+    requirement = attestation_requirement(inv.get("auth_headers") or {})
+    apply_replay_gate(
+        tools,
+        load_active_verification(capture_dir),
+        require_proof=require_active_proof,
+        attestation_reason=requirement.reason if requirement else None,
+    )
 
     pack: dict[str, Any] = {
         "version": TOOLPACK_VERSION,
@@ -801,6 +868,11 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="mcpgen")
     ap.add_argument("capture_dir")
     ap.add_argument("--out", help="toolpack.json (default: <capture_dir>/toolpack.json)")
+    ap.add_argument(
+        "--require-active-proof",
+        action="store_true",
+        help="expose only operations astrolabe re-executed successfully",
+    )
     ap.add_argument(
         "--include-mutations",
         action="store_true",
@@ -830,6 +902,7 @@ def main(argv: list[str] | None = None) -> None:
             include_mutations=a.include_mutations,
             noise_pattern=a.noise_pattern,
             read_pattern=a.read_pattern,
+            require_active_proof=a.require_active_proof,
         )
     except GenerationError as exc:
         raise SystemExit(f"[mcp-gen] {exc}") from exc

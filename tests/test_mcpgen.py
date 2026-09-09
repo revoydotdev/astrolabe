@@ -719,3 +719,66 @@ def test_declared_operations_are_catalogued_without_becoming_callable():
     assert declared[1]["observed"] is True
     for item in declared:
         assert not {"query", "apq_hash", "request_url", "request_template"} & set(item)
+
+
+def _gated(**result):
+    from astrolabe.mcpgen import apply_replay_gate
+
+    tools = [
+        {"name": "Works", "exposed": True},
+        {"name": "Broken", "exposed": True},
+        {"name": "Untried", "exposed": True},
+        {"name": "AlreadyGated", "exposed": False, "reason": "mutation — gated (write op)"},
+    ]
+    verification = {
+        "Works": {"operation": "Works", "ok": True},
+        "Broken": {"operation": "Broken", "ok": False, **result},
+    }
+    apply_replay_gate(tools, verification, **{})
+    return {tool["name"]: tool for tool in tools}
+
+
+def test_replay_failure_withdraws_exposure():
+    tools = _gated(error_code="UPSTREAM_INVALID_GRAPHQL_RESPONSE")
+    assert tools["Broken"]["exposed"] is False
+    assert "failed active verification" in tools["Broken"]["reason"]
+    assert tools["Broken"]["proof_status"] == "replay-failed"
+
+
+def test_successful_replay_keeps_exposure_and_records_proof():
+    tools = _gated()
+    assert tools["Works"]["exposed"] is True
+    assert tools["Works"]["proof_status"] == "verified-active"
+
+
+def test_an_unattempted_operation_is_not_punished_by_default():
+    tools = _gated()
+    assert tools["Untried"]["exposed"] is True
+    assert "proof_status" not in tools["Untried"]
+
+
+def test_require_active_proof_demotes_unverified_operations():
+    from astrolabe.mcpgen import apply_replay_gate
+
+    tools = [{"name": "Untried", "exposed": True}]
+    apply_replay_gate(tools, {}, require_proof=True)
+    assert tools[0]["exposed"] is False
+    assert tools[0]["proof_status"] == "unverified"
+
+
+def test_replay_failure_names_the_attestation_it_could_not_reproduce():
+    from astrolabe.mcpgen import apply_replay_gate
+
+    tools = [{"name": "SearchTimeline", "exposed": True}]
+    apply_replay_gate(
+        tools,
+        {"SearchTimeline": {"operation": "SearchTimeline", "ok": False, "error_code": "HTTP_404"}},
+        attestation_reason="requires client-computed header 'x-client-transaction-id'",
+    )
+    assert "x-client-transaction-id" in tools[0]["reason"]
+
+
+def test_gating_never_re_exposes_an_already_gated_tool():
+    tools = _gated()
+    assert tools["AlreadyGated"]["exposed"] is False
+    assert tools["AlreadyGated"]["reason"] == "mutation — gated (write op)"
