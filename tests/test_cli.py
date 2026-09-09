@@ -1092,3 +1092,145 @@ def test_native_decryption_and_recovery_are_not_parser_defaults():
     args = cli.build_parser().parse_args(["map", "example.com"])
     assert args.browser is None
     assert args.recover_persisted is False
+
+
+# ---- cmd_contract: native browser import mirrors cmd_map's for --execute ----
+
+
+def test_contract_browser_requires_execute():
+    p = cli.build_parser()
+    a = p.parse_args(["contract", "/tmp/cap", "--browser", "vivaldi", "--local"])
+    with pytest.raises(cli.ConfigurationError, match="no effect without --execute"):
+        cli.cmd_contract(a)
+
+
+def test_contract_browser_and_cookies_file_are_mutually_exclusive(monkeypatch, tmp_path):
+    def forbidden(*args, **kwargs):
+        pytest.fail("mutually-exclusive auth sources reached preflight")
+
+    monkeypatch.setattr(cli, "preflight", forbidden)
+    p = cli.build_parser()
+    a = p.parse_args(
+        [
+            "contract",
+            str(tmp_path),
+            "--execute",
+            "--domain",
+            "example.com",
+            "--browser",
+            "vivaldi",
+            "--cookies-file",
+            "cookies.json",
+            "--local",
+        ]
+    )
+    with pytest.raises(cli.ConfigurationError, match="choose --browser or --cookies-file"):
+        cli.cmd_contract(a)
+
+
+def test_contract_browser_refused_on_non_local_host(monkeypatch, tmp_path):
+    def forbidden(*args, **kwargs):
+        pytest.fail("non-local native import reached preflight")
+
+    monkeypatch.setattr(cli, "preflight", forbidden)
+    p = cli.build_parser()
+    a = p.parse_args(
+        [
+            "contract",
+            str(tmp_path),
+            "--execute",
+            "--domain",
+            "example.com",
+            "--browser",
+            "vivaldi",
+            "--host",
+            "remote.invalid",
+        ]
+    )
+    with pytest.raises(cli.SafetyRefusalError):
+        cli.cmd_contract(a)
+
+
+@pytest.fixture
+def _contract_browser_env(monkeypatch, tmp_path):
+    """Stops cmd_contract right after cookie staging (the first remote ssh
+    call) so the test never needs a real capture dir, contract.json, or
+    warm-browser round trip -- only that native import stages cookies the
+    same way --cookies-file already does."""
+    monkeypatch.setattr(cli, "preflight", lambda hp: {"egress_match": True})
+
+    import astrolabe.browser_cookies as bc
+
+    calls: dict = {"export_cookies": None, "writes": []}
+    secret_value = "s3cr3t-session-token"
+
+    def fake_export_cookies(browser, domain, profile):
+        calls["export_cookies"] = (browser, domain, profile)
+        return [
+            {
+                "name": "session",
+                "value": secret_value,
+                "domain": domain,
+                "path": "/",
+                "expires": -1,
+                "httpOnly": True,
+                "secure": True,
+                "sameSite": "Lax",
+            }
+        ]
+
+    monkeypatch.setattr(bc, "export_cookies", fake_export_cookies)
+
+    orig_write = cli.atomic_write_json
+
+    def spy_write(path, value, *, mode=0o644, **kw):
+        calls["writes"].append((str(path), mode))
+        return orig_write(path, value, mode=mode, **kw)
+
+    monkeypatch.setattr(cli, "atomic_write_json", spy_write)
+
+    class _StagingStoppedError(Exception):
+        pass
+
+    def fake_ssh_argv(hp, argv, cwd=None, timeout=None, check=True):
+        raise _StagingStoppedError()
+
+    monkeypatch.setattr(cli, "ssh_argv", fake_ssh_argv)
+
+    cap = tmp_path / "cap"
+    cap.mkdir()
+    calls["cap"] = cap
+    calls["secret_value"] = secret_value
+    calls["stop_exc"] = _StagingStoppedError
+    return calls
+
+
+def test_contract_browser_happy_path_stages_cookies_like_cookies_file(
+    _contract_browser_env, capsys
+):
+    env = _contract_browser_env
+    p = cli.build_parser()
+    a = p.parse_args(
+        [
+            "contract",
+            str(env["cap"]),
+            "--execute",
+            "--domain",
+            "example.com",
+            "--browser",
+            "vivaldi",
+            "--local",
+        ]
+    )
+    with pytest.raises(env["stop_exc"]):
+        cli.cmd_contract(a)
+
+    assert env["export_cookies"] == ("vivaldi", "example.com", "Default")
+
+    cookie_writes = [(path, mode) for path, mode in env["writes"] if path.endswith("_cookies.json")]
+    assert cookie_writes, "cookies were never staged through atomic_write_json"
+    assert all(mode == 0o600 for _path, mode in cookie_writes)
+
+    out = capsys.readouterr().out
+    assert env["secret_value"] not in out
+    assert "[cookies] 1 domain-scoped cookies from vivaldi" in out

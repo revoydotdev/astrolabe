@@ -1142,20 +1142,41 @@ def cmd_contract(a):
     hp = _resolve(a)
     cap = os.path.abspath(a.capture_dir)
     verify_local = None
+    if getattr(a, "browser", None) and not a.execute:
+        raise ConfigurationError("--browser has no effect without --execute")
     if a.execute:
+        if getattr(a, "browser", None):
+            if not hp.local:
+                raise SafetyRefusalError(
+                    "native browser import requires local execution (--local); it cannot "
+                    "decrypt cookies on a remote pipeline host"
+                )
+            if a.cookies_file:
+                raise ConfigurationError("choose --browser or --cookies-file, not both")
+            # A crash must not spill decrypted cookies into a core dump.
+            import resource
+
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        elif not a.cookies_file:
+            raise ConfigurationError("--cookies-file or --browser is required for --execute")
         dom = normalize_host(
             a.domain or json.load(open(os.path.join(cap, "endpoints.json")))["base_domain"]
         )
         preflight(hp)
-        if not a.cookies_file:
-            raise ConfigurationError("--cookies-file is required for --execute")
         cookies_local = os.path.join(cap, "_cookies.json")
         _track_local_secret(cookies_local)
-        atomic_write_json(
-            cookies_local,
-            json.load(open(os.path.expanduser(a.cookies_file))),
-            mode=0o600,
-        )
+        if getattr(a, "browser", None):
+            from .browser_cookies import export_cookies
+
+            cks = export_cookies(a.browser, dom, a.profile)
+            print(f"[cookies] {len(cks)} domain-scoped cookies from {a.browser}")
+            atomic_write_json(cookies_local, cks, mode=0o600)
+        else:
+            atomic_write_json(
+                cookies_local,
+                json.load(open(os.path.expanduser(a.cookies_file))),
+                mode=0o600,
+            )
         rdir = f"/dev/shm/astrolabe-contract-{_target_slug(dom)}-{_new_run_id()}"
         _track_remote_tmpfs(hp, rdir)
         ssh_argv(hp, ["mkdir", "-m", "700", "-p", rdir], timeout=20)
@@ -1583,6 +1604,12 @@ def build_parser():
         "--cookies-file",
         help="Playwright-format cookie JSON export for --execute (bring your own; required)",
     )
+    ct_p.add_argument(
+        "--browser",
+        choices=("vivaldi", "chrome", "chromium", "brave", "edge"),
+        help="explicitly import this domain's cookies from a local Linux browser (with --execute)",
+    )
+    ct_p.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
     ct_p.add_argument("--timeout", type=int, default=400)
     ct_p.set_defaults(func=cmd_contract)
 
