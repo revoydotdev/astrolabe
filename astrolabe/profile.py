@@ -39,6 +39,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -291,7 +292,11 @@ def probe(profile: HostProfile, runner: Runner | None = None) -> dict[str, dict]
         return "ready" if present else default
 
     r, r_state = execute(
-        [profile.cloak_py, "-c", "import cloakbrowser as c;print(c.__version__)"],
+        [
+            sys.executable if profile.local else profile.cloak_py,
+            "-c",
+            "import cloakbrowser as c;print(c.__version__)",
+        ],
         profile.ssh_timeout,
     )
     version = (getattr(r, "stdout", "") or "").strip()
@@ -318,7 +323,11 @@ def probe(profile: HostProfile, runner: Runner | None = None) -> dict[str, dict]
     }
 
     for name, interpreter, statement in (
-        ("capture_dependencies", profile.cloak_py, "import graphql,jsonschema"),
+        (
+            "capture_dependencies",
+            sys.executable if profile.local else profile.cloak_py,
+            "import graphql,jsonschema,tree_sitter,tree_sitter_javascript",
+        ),
         ("tls_http", profile.http_py, "import curl_cffi"),
     ):
         r, r_state = execute([interpreter, "-c", statement], profile.ssh_timeout)

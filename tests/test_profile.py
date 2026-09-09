@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import sys
 import textwrap
 
 import pytest
@@ -302,7 +303,7 @@ def test_validate_false_when_required_capture_dependencies_absent():
     p = prof.resolve_profile(config_path=None)
 
     def fake_runner(argv, timeout):
-        if "import graphql,jsonschema" in argv:
+        if any("import graphql,jsonschema" in str(arg) for arg in argv):
             return _FakeCompleted("", returncode=1)
         return _FakeCompleted("1.0.0\n")
 
@@ -322,7 +323,7 @@ def test_probe_default_runner_is_used_when_none_supplied(monkeypatch):
     monkeypatch.setattr(prof.subprocess, "run", fake_subprocess_run)
     prof.probe(p)
     assert calls  # the default runner actually invoked subprocess.run
-    assert calls[0][0].endswith("/cloakbrowser/bin/python")
+    assert calls[0][0] == sys.executable
 
 
 def test_resolve_rejects_shell_metacharacters_in_host():

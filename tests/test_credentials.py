@@ -68,3 +68,55 @@ def test_v2_cookie_bundle_carries_generation_binding() -> None:
     assert generation == metadata["session_binding"] == "generation-2"
     assert cookies[0]["name"] == "session"
     assert "SECRET" not in json.dumps(metadata, default=str)
+
+
+def test_normalize_extension_and_storage_state_cookies():
+    from astrolabe.credentials import browser_cookies
+
+    raw = [
+        {
+            "name": "session",
+            "value": "secret",
+            "domain": ".example.com",
+            "sameSite": "no_restriction",
+            "secure": True,
+            "httpOnly": True,
+            "expirationDate": 1900000000,
+            "hostOnly": False,
+            "storeId": "0",
+        }
+    ]
+    cookies = browser_cookies({"cookies": raw, "origins": []})
+    assert cookies == [
+        {
+            "name": "session",
+            "value": "secret",
+            "domain": ".example.com",
+            "path": "/",
+            "sameSite": "None",
+            "secure": True,
+            "httpOnly": True,
+            "expires": 1900000000,
+        }
+    ]
+    raw[0]["session"] = True
+    raw[0]["sameSite"] = "unspecified"
+    normalized = browser_cookies(raw)[0]
+    assert "expires" not in normalized
+    assert "sameSite" not in normalized
+
+
+def test_meta_auth_form_fields_are_scoped_and_never_unwrapped_as_headers():
+    bundle = _bundle(form_fields={"fb_dtsg": "private-token", "__a": "1"})
+    _, records, metadata = inspect_credentials(bundle)
+    assert records["Viewer"]["form_fields"]["fb_dtsg"] == "private-token"
+    assert "private-token" not in json.dumps(unwrap_credentials(bundle))
+    assert "private-token" not in json.dumps(metadata, default=str)
+    for fields in [
+        {"doc_id": "other"},
+        {"variables": "{}"},
+        {"fb_dtsg": 123},
+        {"lsd": "x" * 16385},
+    ]:
+        with pytest.raises(CredentialBundleError, match="form fields"):
+            inspect_credentials(_bundle(form_fields=fields))

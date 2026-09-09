@@ -6,11 +6,49 @@ from datetime import UTC, datetime
 from typing import Any
 
 CREDENTIAL_SCHEMA_VERSION = 2
+META_AUTH_FORM_FIELDS = frozenset(
+    {"fb_dtsg", "jazoest", "lsd", "__a", "__user", "__comet_req", "av"}
+)
 SUPPORTED_CREDENTIAL_SCHEMA_VERSIONS = frozenset({1, 2})
 
 
 class CredentialBundleError(ValueError):
     pass
+
+
+def browser_cookies(value: Any) -> list[dict[str, Any]]:
+    """Normalize Playwright/storage-state and common extension exports for add_cookies."""
+    cookies = value.get("cookies") if isinstance(value, dict) else value
+    if not isinstance(cookies, list):
+        raise CredentialBundleError("cookie export must be an array or contain a cookies array")
+    result = []
+    for item in cookies:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(k), str) for k in ("name", "value")
+        ):
+            raise CredentialBundleError("cookie export contains an invalid record")
+        cookie = {
+            key: item[key]
+            for key in ("name", "value", "domain", "path", "url", "secure", "httpOnly")
+            if key in item
+        }
+        if "url" not in cookie:
+            if not isinstance(cookie.get("domain"), str) or not cookie["domain"]:
+                raise CredentialBundleError("cookie requires a domain or URL")
+            cookie.setdefault("path", "/")
+        same_site = str(item.get("sameSite") or "").lower()
+        if same_site in {"strict", "lax", "none", "no_restriction"}:
+            cookie["sameSite"] = {
+                "strict": "Strict",
+                "lax": "Lax",
+                "none": "None",
+                "no_restriction": "None",
+            }[same_site]
+        expires = item.get("expires", item.get("expirationDate"))
+        if not item.get("session") and isinstance(expires, (float, int)) and expires > 0:
+            cookie["expires"] = expires
+        result.append(cookie)
+    return result
 
 
 def _timestamp(value: Any, label: str, *, nullable: bool = False) -> datetime | None:
@@ -97,7 +135,19 @@ def inspect_credentials(
             metadata["expires_at"] = _timestamp(
                 raw_record["expires_at"], f"credential {alias!r} expires_at", nullable=True
             )
-        records[str(alias)] = {"headers": raw_record["headers"], "metadata": metadata}
+        form_fields = raw_record.get("form_fields", {})
+        if not isinstance(form_fields, dict) or any(
+            key not in META_AUTH_FORM_FIELDS or not isinstance(val, str) or len(val) > 16384
+            for key, val in form_fields.items()
+        ):
+            raise CredentialBundleError(
+                "credential has unsupported or oversized authentication form fields"
+            )
+        records[str(alias)] = {
+            "headers": raw_record["headers"],
+            "metadata": metadata,
+            "form_fields": dict(form_fields),
+        }
     return generation, records, bundle_metadata
 
 
