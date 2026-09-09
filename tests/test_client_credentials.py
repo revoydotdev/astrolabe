@@ -67,3 +67,46 @@ def test_matches_proves_a_supplied_credential_without_storing_it():
     assert matches(site, "wrong-value") is False
     assert matches(site, "") is False
     assert matches({}, BEARER) is False
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        # WebAuthn operation names whose values are persisted query ids, seen on a real
+        # x.com bundle: a substring match read all four as credentials.
+        "SetupPublicKeyCredential",
+        "CreatePublicKeyCredential",
+        "DeletePublicKeyCredential",
+        "ListPublicKeyCredentials",
+        "publicKey",
+        "apiKeyValidationError",
+        "authorizationHeaderName",
+    ],
+)
+def test_only_a_key_that_is_a_credential_counts_not_one_that_mentions_it(key):
+    body = f'{{"{key}":"{BEARER}"}}'.encode()
+    assert discover(body, "https://cdn.example.com/main.js") == []
+
+
+@pytest.mark.parametrize(
+    "key", ["authorization", "apiKey", "api_key", "x-api-key", "clientSecret", "auth_token"]
+)
+def test_credential_keys_still_match_exactly(key):
+    body = f'{{"{key}":"{BEARER}"}}'.encode()
+    assert len(discover(body, "https://cdn.example.com/main.js")) == 1
+
+
+def test_finds_a_bearer_literal_a_minified_bundle_does_not_name():
+    # The shape x.com ships: the credential lives in an anonymous arrow function, so
+    # no key names it, but the scheme prefix identifies it.
+    body = f'var n=[1,2,3],j=()=>"Bearer {BEARER}";'.encode()
+    sites = discover(body, "https://cdn.example.com/main.js")
+    assert len(sites) == 1
+    assert sites[0].key == "authorization"
+    assert sites[0].value_sha256 == hashlib.sha256(BEARER.encode()).hexdigest()
+    assert BEARER not in str(sites[0].to_dict())
+
+
+def test_a_bearer_and_a_named_key_holding_it_collapse_to_one_site():
+    body = f'{{"authorization":"{BEARER}"}};x=()=>"Bearer {BEARER}";'.encode()
+    assert len(discover(body, "https://cdn.example.com/main.js")) == 1

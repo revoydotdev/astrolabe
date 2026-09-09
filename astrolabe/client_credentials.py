@@ -25,9 +25,14 @@ from typing import Any
 # Identifiers that hold a client credential in shipped application code. Matched against
 # the key an opaque literal is assigned to, never against the literal itself, so a long
 # random-looking string only counts when the application itself calls it a credential.
+#
+# The whole key must match. A substring match reads any identifier merely containing a
+# credential word as a credential: `SetupPublicKeyCredential` is a WebAuthn operation
+# whose value is a persisted query id, not a secret. `public_key` is excluded outright
+# for the same reason — in a browser bundle it names WebAuthn, not an API credential.
 _CREDENTIAL_KEY = re.compile(
-    rb"(authorization|bearer[_-]?token|api[_-]?key|apikey|client[_-]?token|"
-    rb"access[_-]?token|public[_-]?key|app[_-]?(?:id|key|token)|subscription[_-]?key)",
+    rb"(x[_-]?)?(authorization|bearer([_-]?token)?|api[_-]?key|client[_-]?(key|token|secret)|"
+    rb"access[_-]?token|app[_-]?(id|key|token)|subscription[_-]?key|auth[_-]?token)",
     re.IGNORECASE,
 )
 
@@ -35,6 +40,13 @@ _CREDENTIAL_KEY = re.compile(
 _ASSIGNMENT = re.compile(
     rb"[\"']?([A-Za-z_$][A-Za-z0-9_$-]{2,40})[\"']?\s*[:=]\s*[\"']([A-Za-z0-9+/=._~%-]{20,512})[\"']"
 )
+
+# A complete `Bearer <token>` literal in shipped application code. Minified bundles
+# routinely hold the credential in an anonymous constant the key-name rule cannot see
+# (x.com ships `()=>"Bearer AAAA…"`), but the scheme prefix identifies it on its own: a
+# bearer written as a literal in code every visitor downloads is a static client
+# credential by construction, never a user's session token.
+_BEARER_LITERAL = re.compile(rb"[\"']Bearer\s+([A-Za-z0-9+/=._~%-]{20,512})[\"']")
 
 # Below this length a literal is a label or an identifier, not a credential.
 MIN_CREDENTIAL_LENGTH = 20
@@ -64,9 +76,14 @@ def discover(body: bytes, source_url: str) -> list[ClientCredentialSite]:
         return []
     source_sha256 = hashlib.sha256(body).hexdigest()
     seen: dict[tuple[str, str], ClientCredentialSite] = {}
-    for match in _ASSIGNMENT.finditer(body):
-        key, value = match.group(1), match.group(2)
-        if not _CREDENTIAL_KEY.search(key) or len(value) < MIN_CREDENTIAL_LENGTH:
+    candidates = [(b"authorization", match.group(1)) for match in _BEARER_LITERAL.finditer(body)]
+    candidates += [
+        (match.group(1), match.group(2))
+        for match in _ASSIGNMENT.finditer(body)
+        if _CREDENTIAL_KEY.fullmatch(match.group(1))
+    ]
+    for key, value in candidates:
+        if len(value) < MIN_CREDENTIAL_LENGTH:
             continue
         decoded_key = key.decode("utf-8", "replace")
         digest = hashlib.sha256(value).hexdigest()
