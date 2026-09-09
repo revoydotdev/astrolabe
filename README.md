@@ -36,15 +36,28 @@ call it makes, and hands the traffic to a local analysis pipeline:
   re-execution of a single operation, for monitoring or parameter
   enumeration without a browser per request
 
-## Bring your own cookies
+## Authentication
 
-astrolabe never reads or decrypts your browser's cookie store. Authentication
-is entirely bring-your-own: export your session as a Playwright-format cookie
-JSON file and pass it with `--cookies-file`. There is no `--browser`/
-`--profile` flag and no code path that touches Chrome/Chromium/Vivaldi/Edge/
-Brave's local cookie database. If you need cookies from a browser, export them
-yourself (e.g. with a Playwright `storage_state()` dump or a cookie-export
-extension) before running astrolabe.
+Supply an exported session with `--cookies-file`, or explicitly select a local
+Linux Chromium browser with `--browser vivaldi --profile Default`. Browser import
+requires `astrolabe[browser-auth]` and reads only cookies for the requested domain
+and its subdomains. It decrypts v10/v11 cookies using the browser's Safe Storage
+key, validates padding and modern cookie domain binding, and never returns cookie
+values through MCP. Native import is local-only, disables HAR and TLS interception,
+and stages temporary credentials in private tmpfs files removed after capture.
+
+For MCP, the operator must first configure `ASTROLABE_BROWSER_AUTH_DOMAINS=x.com`
+on the server process (comma-separated exact domains; empty by default). Then call
+`map_site(domain="x.com", browser="vivaldi", seeds=["https://x.com/home"])`.
+Tool arguments cannot enable or widen this operator allowlist. Browser import is explicit; omitting both `browser`
+and `cookies_file` remains anonymous. Windows/macOS native browser decryption is
+not implemented; exported cookie files remain portable across platforms.
+
+Persisted recovery is separately opt-in: `--recover-persisted` or
+`map_site(..., recover_persisted=True)`. This matches APQ documents by SHA-256 and
+Meta Relay compiler metadata by exact persisted ID and operation name. Metadata
+recovery does not imply recovery of original GraphQL source. See
+[recovery and browser-auth security](docs/relay-and-browser-auth.md).
 
 ## Install
 
@@ -83,6 +96,16 @@ fast with an install hint rather than silently falling back.
 
 ## Usage
 
+The native mapping MCP entry point is `astrolabe-mapping-mcp` (or
+`python -m astrolabe.mapping_mcp`). Set `ASTROLABE_WORKSPACE` to the local
+capture workspace. Its `map_site` accepts a private exported `cookies_file`,
+optional seed URLs, and enables exact persisted-query recovery by default.
+It uses this installation's browser/Byparr pipeline and generates a read-only
+Chart. Serve that Chart with `astrolabe-mcp`.
+
+See [persisted-query recovery and payload decoding](docs/persisted-recovery.md)
+for supported packaging, evidence requirements, and limitations.
+
 ```
 astrolabe preflight                          # health + egress-safety check
 
@@ -96,6 +119,7 @@ astrolabe scan https://example.com/catalog \
 
 astrolabe map example.com \
     --cookies-file cookies.json \            # bring-your-own Playwright cookie export
+    --recover-persisted \                    # match browser SHA-256 inputs to observed APQ requests
     --recipe surfaces/example.com.recipe.py \  # per-site interactions (optional)
     [--schema]     # recover GraphQL schema if introspection is off + suggestions leak
     [--openapi]    # first-party REST OpenAPI (host-side; HAR never leaves the host)
