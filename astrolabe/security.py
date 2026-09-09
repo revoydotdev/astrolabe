@@ -16,6 +16,11 @@ import socket
 import tempfile
 import urllib.parse as up
 import zlib
+
+try:
+    from .payloads import decode_payload, PackagingError
+except ImportError:  # flat capture-host deployment
+    from payloads import decode_payload, PackagingError  # type: ignore[import-not-found,no-redef]
 from collections.abc import Mapping
 from typing import Any
 
@@ -377,7 +382,11 @@ def request_metadata(
         result["request_truncated"] = {"reason": "body_byte_budget"}
     parsed: Any = None
     try:
-        parsed = json.loads(decoded)
+        payload = decode_payload(
+            raw, media_type=media_type, content_encoding=content_encoding, max_bytes=max_body_bytes
+        )
+        parsed = payload.value
+        result["request_packaging"] = list(payload.layers)
     except Exception:
         if "multipart/form-data" in media_type:
             parsed = _multipart_shape(decoded)

@@ -111,6 +111,9 @@ class Evidence:
     response_kind: str | None = None
     request_shape: Any = None
     response_shape: Any = None
+    request_packaging: list[str] = field(default_factory=list)
+    response_packaging: list[str] = field(default_factory=list)
+    graphql_response_success: bool | None = None
     successful: bool = False
     failure: dict[str, Any] | None = None
     interaction_id: str | None = None
@@ -806,6 +809,9 @@ def graph_from_inventory(
             response_kind=record.get("response_kind"),
             request_shape=record.get("request_shape"),
             response_shape=record.get("resp_shape"),
+            request_packaging=record.get("request_packaging") or [],
+            response_packaging=record.get("response_packaging") or [],
+            graphql_response_success=record.get("graphql_response_success"),
             successful=isinstance(record.get("status"), int) and record["status"] < 400,
             failure=record.get("failure"),
             interaction_id=record.get("interaction_id"),
@@ -1384,6 +1390,9 @@ def evidence_records_from_graph(graph: dict[str, Any]) -> list[dict[str, Any]]:
             "request_media_type": item.get("request_media_type"),
             "request_shape": item.get("request_shape"),
             "resp_shape": item.get("response_shape"),
+            "request_packaging": item.get("request_packaging") or [],
+            "response_packaging": item.get("response_packaging") or [],
+            "graphql_response_success": item.get("graphql_response_success"),
             "failure": item.get("failure"),
             "response_kind": item.get("response_kind"),
         }
