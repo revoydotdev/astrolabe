@@ -294,6 +294,7 @@ CAPTURE_HELPERS = (
     "graphql_doc.py",
     "persisted.py",
     "relay.py",
+    "client_credentials.py",
     "payloads.py",
     "schema_recover.py",
 )

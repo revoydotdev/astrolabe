@@ -30,6 +30,8 @@ try:
         graphql_response_success,
     )
     from astrolabe.relay import RelayCatalog, MAX_SCRIPT_BYTES, MAX_SCRIPTS
+    from astrolabe.client_credentials import MAX_SITES_PER_CAPTURE as MAX_CREDENTIAL_SITES
+    from astrolabe.client_credentials import discover as discover_client_credentials
     from astrolabe.payloads import decode_payload
     from astrolabe.security import (
         atomic_write_json,
@@ -53,6 +55,10 @@ except ImportError:  # standalone deployment on the capture host
         graphql_response_success,
     )
     from relay import RelayCatalog, MAX_SCRIPT_BYTES, MAX_SCRIPTS  # type: ignore[import-not-found,no-redef]
+    from client_credentials import (  # type: ignore[import-not-found,no-redef]
+        MAX_SITES_PER_CAPTURE as MAX_CREDENTIAL_SITES,
+        discover as discover_client_credentials,
+    )
     from payloads import decode_payload  # type: ignore[import-not-found,no-redef]
     from security import (  # type: ignore[import-not-found,no-redef]
         atomic_write_json,
@@ -816,6 +822,7 @@ def main():
     # no longer all-or-nothing.
     jf = open(os.path.join(a.outdir, "capture.jsonl"), "w")
     relay_catalog = RelayCatalog()
+    credential_sites: list[dict] = []
 
     kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
     ctx = launch_context(**kw)
@@ -903,9 +910,17 @@ def main():
                         relay_catalog.exhausted = True
                     else:
                         try:
-                            relay_catalog.add(resp.body(), live_url)
+                            script_body = resp.body()
                         except Exception:
                             return  # A navigated-away CDN body supplies no usable evidence.
+                        relay_catalog.add(script_body, live_url)
+                        # Same already-loaded script, so no extra fetch: note where the
+                        # application keeps its static client credential. Provenance and
+                        # digest only — the value itself is never recorded.
+                        if len(credential_sites) < MAX_CREDENTIAL_SITES:
+                            for site in discover_client_credentials(script_body, live_url):
+                                if site.to_dict() not in credential_sites:
+                                    credential_sites.append(site.to_dict())
                 return
             if req.resource_type not in ("xhr", "fetch") and not API_HINT.search(live_url):
                 return
@@ -1478,6 +1493,7 @@ def main():
                 # Inventory of what the client declares, which is a superset of what a
                 # read-only walk can trigger. Never an authorization to execute.
                 "declared_operations": relay_catalog.declared_operations(),
+                "client_credentials": credential_sites,
                 "truncations": dict(SHAPE_TRUNCATIONS),
                 "failures": failures,
                 "failure_summary": summarize_failures(failures),

@@ -580,6 +580,10 @@ def render(outdir, recs, meta, *, prior_graph=None):
             {**declared, "observed": declared.get("name") in observed_operations}
             for declared in (meta.get("declared_operations") or [])
         ],
+        # Where the application keeps the static client credential its own API calls
+        # carry. Provenance and digest only, so a contract can state the requirement
+        # (and later prove a supplied value is the right one) without holding a secret.
+        "client_credentials": meta.get("client_credentials") or [],
         "rest_endpoints": [
             {
                 "method": m,

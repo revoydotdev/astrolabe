@@ -858,6 +858,7 @@ def build_pack(
         # not tools: a client can see that an operation exists without gaining any way
         # to call it, and unobserved writes stay visible without becoming reachable.
         "declared_operations": build_declared_operations(inv),
+        "client_credentials": inv.get("client_credentials") or [],
     }
     if endpoint:
         pack["endpoint"] = endpoint
