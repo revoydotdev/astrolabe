@@ -18,6 +18,7 @@ from typing import Any
 from . import analyze as az
 from . import mcpgen as mg
 from . import contract as ct
+from . import contract_store
 from . import profile as prof
 from . import browser as br
 from .artifact import atomic_write_json
@@ -614,6 +615,36 @@ def _probe_local_playwright(timeout: int = 30) -> tuple[bool, str]:
     return r.returncode == 0, _result_detail(r)
 
 
+def _prior_contract(a, domain: str) -> str | None:
+    """The domain's accumulated contract, unless the operator asked for a run-local one."""
+    if getattr(a, "no_contract_store", False):
+        return None
+    try:
+        prior = contract_store.prior_contract(domain, root=getattr(a, "contract_store", None))
+    except contract_store.ContractStoreError:
+        return None
+    return str(prior) if prior else None
+
+
+def _publish_contract(a, domain: str, produced: str) -> None:
+    """Promote this run's contract to the domain's record, so runs accumulate.
+
+    A store that cannot be written is reported and not raised: the run's own artifacts
+    are complete and correct, and failing the command would discard them over a
+    bookkeeping problem.
+    """
+    if getattr(a, "no_contract_store", False) or not os.path.exists(produced):
+        return
+    try:
+        published = contract_store.publish(
+            domain, produced, root=getattr(a, "contract_store", None)
+        )
+    except (contract_store.ContractStoreError, OSError, ValueError) as exc:
+        print(f"[contract] contract of record not updated: {safe_text(exc)}")
+        return
+    print(f"[contract] contract of record for {domain} -> {published}")
+
+
 @_guaranteed_cleanup
 def cmd_map(a):
     hp = _resolve(a)
@@ -867,11 +898,12 @@ def cmd_map(a):
     # 7b. durable typed contract (observed proof) — merges the prior contract in this
     #     out dir so the map completes across runs and drift is surfaced. The contract,
     #     not the map, is the artifact downstream active tooling depends on.
-    prior = os.path.join(final_out, "contract.json")
+    prior = _prior_contract(a, dom) or os.path.join(final_out, "contract.json")
     import sys as _s
 
-    _s.argv = ["contract", out] + (["--merge", prior] if os.path.exists(prior) else [])
+    _s.argv = ["contract", out] + (["--merge", str(prior)] if os.path.exists(prior) else [])
     ct.main()
+    _publish_contract(a, dom, os.path.join(out, "contract.json"))
 
     # 8. cleanup — remote tmpfs (cookies + auth headers + captures) AND local cookies
     ssh_argv(hp, ["rm", "-rf", "--", rdir], timeout=20)
@@ -1248,15 +1280,21 @@ def cmd_contract(a):
         json.load(open(verify_local))
         ssh_argv(hp, ["rm", "-rf", "--", rdir], timeout=20)
         _remove_local_secret(cookies_local)
+    domain = normalize_host(
+        getattr(a, "domain", None)
+        or json.load(open(os.path.join(cap, "endpoints.json")))["base_domain"]
+    )
     argv = ["contract", cap]
-    if a.merge:
-        argv += ["--merge", a.merge]
+    merge_from = a.merge or _prior_contract(a, domain)
+    if merge_from:
+        argv += ["--merge", str(merge_from)]
     if verify_local:
         argv += ["--active", verify_local]
     import sys as _s
 
     _s.argv = argv
     ct.main()
+    _publish_contract(a, domain, os.path.join(cap, "contract.json"))
 
 
 def cmd_recipe(a):
@@ -1403,6 +1441,16 @@ def build_parser():
         help="explicitly import this domain's cookies from a local Linux browser",
     )
     m.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
+    m.add_argument(
+        "--contract-store",
+        help="directory holding the per-domain contract of record "
+        "(default: .astrolabe/contracts, or ASTROLABE_CONTRACT_STORE)",
+    )
+    m.add_argument(
+        "--no-contract-store",
+        action="store_true",
+        help="keep this run's contract to itself instead of accumulating per domain",
+    )
     m.add_argument("--max-total-requests", type=int, default=10_000)
     m.add_argument("--max-origin-requests", type=int, default=5_000)
     m.add_argument("--max-operation-requests", type=int, default=500)
@@ -1564,6 +1612,16 @@ def build_parser():
     )
     ct_p.add_argument("capture_dir")
     ct_p.add_argument("--merge", help="prior contract.json (completeness + drift)")
+    ct_p.add_argument(
+        "--contract-store",
+        help="directory holding the per-domain contract of record "
+        "(default: .astrolabe/contracts, or ASTROLABE_CONTRACT_STORE)",
+    )
+    ct_p.add_argument(
+        "--no-contract-store",
+        action="store_true",
+        help="keep this run's contract to itself instead of accumulating per domain",
+    )
     ct_p.add_argument("--execute", action="store_true", help="actively verify ops via warm browser")
     ct_p.add_argument(
         "--domain", help="target domain for --execute (default: capture's base_domain)"

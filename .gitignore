@@ -39,3 +39,6 @@ secrets/
 dist/
 build/
 *.egg-info/
+
+# per-domain contract of record
+.astrolabe/
