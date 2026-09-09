@@ -2567,3 +2567,30 @@ async def test_meta_form_credentials_are_injected_only_into_meta_body(configured
     tool.update(protocol="graphql-inline", query="query JobSearch($page:Int){jobs(page:$page)}")
     await runtime.execute(tool, {"page": 1})
     assert "form-secret" not in json.dumps(captured)
+
+
+def test_declared_operations_cannot_smuggle_a_callable_request(tmp_path, pack):
+    pack["declared_operations"] = [
+        {
+            "name": "DeleteTweet",
+            "operation_kind": "mutation",
+            "request_url": "https://api.example.com/graphql/abc/DeleteTweet",
+        }
+    ]
+    with pytest.raises(ConfigurationError, match="carries request fields"):
+        _validate_pack(pack, Settings(tmp_path / "pack.json"))
+
+
+def test_declared_operations_reject_an_unsupported_kind(tmp_path, pack):
+    pack["declared_operations"] = [{"name": "Odd", "operation_kind": "fragment"}]
+    with pytest.raises(ConfigurationError, match="unsupported kind"):
+        _validate_pack(pack, Settings(tmp_path / "pack.json"))
+
+
+def test_declared_operations_accept_pure_inventory(tmp_path, pack):
+    pack["declared_operations"] = [
+        {"name": "DeleteTweet", "operation_kind": "mutation", "observed": False},
+        {"name": "HomeTimeline", "operation_kind": "query", "observed": True},
+    ]
+    validated = _validate_pack(pack, Settings(tmp_path / "pack.json"))
+    assert len(validated["declared_operations"]) == 2

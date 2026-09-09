@@ -351,6 +351,34 @@ class RelayCatalog:
             else:
                 self.entries.setdefault(artifact["id"], []).append(artifact)
 
+    def declared_operations(self) -> list[dict[str, Any]]:
+        """Every operation the client's compiler output declares, observed or not.
+
+        A capture only ever sees the operations a walk happened to trigger, so writes
+        stay invisible while browsing. The compiler registry declares the whole
+        catalogue, which is inventory evidence about what exists — never authority to
+        execute anything. Ambiguous identifiers are dropped on the same terms `bind`
+        refuses them: one identifier disagreeing about name or kind proves nothing.
+        """
+        declared: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for identifier, artifacts in self.entries.items():
+            if len({(a["name"], a["operation_kind"]) for a in artifacts}) != 1:
+                continue
+            for artifact in artifacts:
+                key = (identifier, artifact["name"], artifact["operation_kind"])
+                declared.setdefault(
+                    key,
+                    {
+                        "id": identifier,
+                        "name": artifact["name"],
+                        "operation_kind": artifact["operation_kind"],
+                        "source": artifact.get("source"),
+                        "source_sha256": artifact.get("source_sha256"),
+                        "source_url": artifact.get("source_url"),
+                    },
+                )
+        return [declared[key] for key in sorted(declared)]
+
     def bind(self, entry: dict[str, Any], success: bool) -> dict[str, Any]:
         if self.exhausted or entry.get("protocol") not in {
             "graphql-meta-doc-id",

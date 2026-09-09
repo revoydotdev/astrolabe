@@ -837,6 +837,27 @@ def _validate_pack(raw: Any, settings: Settings) -> dict[str, Any]:
             )
         if not isinstance(channel.get("read_only_setup_attested", False), bool):
             raise ConfigurationError(f"event channel {channel_id!r} has invalid setup attestation")
+    declared_operations = raw.get("declared_operations") or []
+    if not isinstance(declared_operations, list):
+        raise ConfigurationError("toolpack.declared_operations must be an array")
+    # Inventory describes what exists; it must never be able to describe how to call it.
+    # Refusing request-bearing fields keeps that boundary structural rather than a
+    # convention the generator is trusted to have followed.
+    for index, declared in enumerate(declared_operations):
+        if not isinstance(declared, dict):
+            raise ConfigurationError(f"toolpack.declared_operations[{index}] must be an object")
+        smuggled = {"query", "apq_hash", "request_url", "request_template", "endpoint"} & set(
+            declared
+        )
+        if smuggled:
+            raise ConfigurationError(
+                f"declared operation {declared.get('name')!r} carries request fields: "
+                f"{', '.join(sorted(smuggled))}"
+            )
+        if declared.get("operation_kind") not in {"query", "mutation", "subscription"}:
+            raise ConfigurationError(
+                f"declared operation {declared.get('name')!r} has an unsupported kind"
+            )
     miscellaneous = raw.get("misc_operations") or {}
     if not isinstance(miscellaneous, dict):
         raise ConfigurationError("toolpack.misc_operations must be an object")

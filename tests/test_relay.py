@@ -293,3 +293,50 @@ def test_markerless_scripts_do_not_consume_the_recovery_budget(monkeypatch):
     catalog.add(x_source(), "https://cdn.example/main.js")
     assert not catalog.exhausted
     assert catalog.bind(x_entry(), True)["semantic_kind"] == "query"
+
+
+def test_declared_operations_catalogue_dedupes_and_sorts():
+    catalog = RelayCatalog()
+    catalog.entries = {
+        "id-b": [
+            {
+                "name": "CreateTweet",
+                "operation_kind": "mutation",
+                "source": "x-persisted-registry",
+                "source_sha256": "b" * 64,
+                "source_url": "https://cdn.example.com/main.js",
+            },
+            {
+                "name": "CreateTweet",
+                "operation_kind": "mutation",
+                "source": "x-persisted-registry",
+                "source_sha256": "b" * 64,
+                "source_url": "https://cdn.example.com/main.js",
+            },
+        ],
+        "id-a": [
+            {
+                "name": "HomeTimeline",
+                "operation_kind": "query",
+                "source": "x-persisted-registry",
+                "source_sha256": "a" * 64,
+                "source_url": "https://cdn.example.com/main.js",
+            }
+        ],
+    }
+    declared = catalog.declared_operations()
+    assert [item["name"] for item in declared] == ["HomeTimeline", "CreateTweet"]
+    assert declared[1]["operation_kind"] == "mutation"
+    assert all("query" not in item for item in declared)
+
+
+def test_declared_operations_drop_identifiers_that_disagree():
+    catalog = RelayCatalog()
+    catalog.entries = {
+        "conflict": [
+            {"name": "One", "operation_kind": "query", "source_sha256": "a" * 64},
+            {"name": "Two", "operation_kind": "mutation", "source_sha256": "b" * 64},
+        ],
+        "agreed": [{"name": "Three", "operation_kind": "query", "source_sha256": "c" * 64}],
+    }
+    assert [item["name"] for item in catalog.declared_operations()] == ["Three"]

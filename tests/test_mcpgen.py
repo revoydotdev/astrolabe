@@ -669,3 +669,53 @@ def _write_capture(
     (tmp_path / "capture.jsonl").write_text(
         "".join(json.dumps(line) + "\n" for line in capture_lines)
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "kind", "expected"),
+    [
+        ("HomeTimeline", "query", "read"),
+        ("CreateTweet", "mutation", "create"),
+        ("FavoriteTweet", "mutation", "create"),
+        ("DeleteBookmark", "mutation", "delete"),
+        ("UnfavoriteTweet", "mutation", "delete"),
+        ("ModerateTweet", "mutation", "update"),
+        ("UpdatePinnedTimelines", "mutation", "update"),
+        # A query is a read on compiler evidence, whatever its name suggests.
+        ("DeleteSomethingQuery", "query", "read"),
+    ],
+)
+def test_crud_hint_reads_kind_first_then_name(name, kind, expected):
+    from astrolabe.mcpgen import crud_hint
+
+    assert crud_hint(name, kind) == expected
+
+
+def test_declared_operations_are_catalogued_without_becoming_callable():
+    from astrolabe.mcpgen import build_declared_operations
+
+    declared = build_declared_operations(
+        {
+            "declared_operations": [
+                {
+                    "name": "DeleteTweet",
+                    "operation_kind": "mutation",
+                    "id": "abc",
+                    "observed": False,
+                    "source_sha256": "d" * 64,
+                    "source_url": "https://cdn.example.com/main.js",
+                },
+                {"name": "HomeTimeline", "operation_kind": "query", "id": "def", "observed": True},
+                {"name": "Broken", "operation_kind": "fragment", "id": "ghi"},
+                {"name": "", "operation_kind": "query", "id": "jkl"},
+            ]
+        }
+    )
+    assert [item["name"] for item in declared] == ["DeleteTweet", "HomeTimeline"]
+    assert declared[0]["crud_hint"] == "delete"
+    assert declared[0]["crud_hint_basis"] == "operation-name-heuristic"
+    assert declared[0]["evidence"] == "compiler-metadata"
+    assert declared[0]["observed"] is False
+    assert declared[1]["observed"] is True
+    for item in declared:
+        assert not {"query", "apq_hash", "request_url", "request_template"} & set(item)

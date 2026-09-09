@@ -1475,6 +1475,9 @@ def main():
                     "relay_artifacts": relay_catalog.count,
                     "relay_budget_exhausted": relay_catalog.exhausted,
                 },
+                # Inventory of what the client declares, which is a superset of what a
+                # read-only walk can trigger. Never an authorization to execute.
+                "declared_operations": relay_catalog.declared_operations(),
                 "truncations": dict(SHAPE_TRUNCATIONS),
                 "failures": failures,
                 "failure_summary": summarize_failures(failures),

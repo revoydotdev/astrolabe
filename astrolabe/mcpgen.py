@@ -483,6 +483,55 @@ def build_graphql_tools(
     return tools
 
 
+# A declared operation's KIND is compiler evidence. Its CRUD subclass is only a reading
+# of the name, so it is reported beside its basis and never decides exposure.
+_CRUD_CREATE = re.compile(
+    r"^(create|add|new|generate|make|send|post|upload|insert|favorite|retweet|pin|"
+    r"bookmark|follow|subscribe|join|invite|enable)",
+    re.I,
+)
+_CRUD_DELETE = re.compile(
+    r"^(delete|remove|destroy|clear|un[a-z]|leave|cancel|revoke|dismiss|hide|block|"
+    r"mute|disable|downvote)",
+    re.I,
+)
+_DECLARED_KINDS = {"query", "mutation", "subscription"}
+
+
+def crud_hint(name: str, operation_kind: str) -> str:
+    if operation_kind == "query":
+        return "read"
+    if _CRUD_DELETE.match(name):
+        return "delete"
+    if _CRUD_CREATE.match(name):
+        return "create"
+    return "update"
+
+
+def build_declared_operations(inv: dict[str, Any]) -> list[dict[str, Any]]:
+    """Catalogue the client's declared operations without making any of them callable."""
+    declared = []
+    for item in inv.get("declared_operations") or []:
+        name = str(item.get("name") or "")
+        operation_kind = str(item.get("operation_kind") or "")
+        if not name or operation_kind not in _DECLARED_KINDS:
+            continue
+        declared.append(
+            {
+                "name": name,
+                "operation_kind": operation_kind,
+                "identifier": item.get("id"),
+                "observed": bool(item.get("observed")),
+                "crud_hint": crud_hint(name, operation_kind),
+                "crud_hint_basis": "operation-name-heuristic",
+                "evidence": "compiler-metadata",
+                "source_sha256": item.get("source_sha256"),
+                "source_url": item.get("source_url"),
+            }
+        )
+    return sorted(declared, key=lambda item: (item["operation_kind"], item["name"]))
+
+
 def build_rest_tools(
     inv: dict[str, Any],
     returns: dict[tuple, Any],
@@ -738,6 +787,10 @@ def build_pack(
         "tools": tools,
         "event_channels": build_event_channels(inv),
         "misc_operations": inv.get("misc_operations") or {},
+        # Catalogue, not capability. These carry no request, so they are deliberately
+        # not tools: a client can see that an operation exists without gaining any way
+        # to call it, and unobserved writes stay visible without becoming reachable.
+        "declared_operations": build_declared_operations(inv),
     }
     if endpoint:
         pack["endpoint"] = endpoint

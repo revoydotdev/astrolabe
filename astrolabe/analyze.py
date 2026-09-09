@@ -544,6 +544,7 @@ def render(outdir, recs, meta, *, prior_graph=None):
     )
 
     # endpoints.json
+    observed_operations = {v["op"] for v in ops.values() if v.get("op")} | set(ops)
     inv = {
         "base_domain": base,
         "graphql_endpoints": list(meta.get("graphql_endpoints", {})),
@@ -572,6 +573,13 @@ def render(outdir, recs, meta, *, prior_graph=None):
             }
             for k, v in ops.items()
         },
+        # Declared by the client's own compiler output. `observed` separates what this
+        # walk actually exercised from what merely exists, so a reader cannot mistake
+        # catalogue breadth for captured evidence.
+        "declared_operations": [
+            {**declared, "observed": declared.get("name") in observed_operations}
+            for declared in (meta.get("declared_operations") or [])
+        ],
         "rest_endpoints": [
             {
                 "method": m,
