@@ -38,6 +38,7 @@ TYPE_NAMES = {
     "float": "number",
     "bool": "boolean",
     "NoneType": "null",
+    "null": "null",
 }
 
 # Ordering for stable, readable output.
@@ -55,13 +56,20 @@ class ShapeNode:
     types: set[str] = field(default_factory=set)
     props: dict[str, ShapeNode] = field(default_factory=dict)
     items: ShapeNode | None = None
+    incomplete_object: bool = False
+    incomplete_items: bool = False
 
     def observe(self, shape: Any) -> None:
+        if isinstance(shape, dict) and set(shape) == {"$astrolabe_truncated"}:
+            return  # Budget metadata is not an observed object value.
         self.total += 1
         if isinstance(shape, dict):
             self.types.add("object")
             self.object_count += 1
             for key, value in shape.items():
+                if key == "$astrolabe_truncated":
+                    self.incomplete_object = True
+                    continue
                 self.props.setdefault(str(key), ShapeNode()).observe(value)
             return
         if isinstance(shape, list):
@@ -69,6 +77,11 @@ class ShapeNode:
             if self.items is None:
                 self.items = ShapeNode()
             for element in shape:
+                if isinstance(element, dict) and "$astrolabe_truncated" in element:
+                    marker = element["$astrolabe_truncated"]
+                    if isinstance(marker, dict) and marker.get("reason") == "array_sample_budget":
+                        self.incomplete_items = True
+                        continue
                 self.items.observe(element)
             return
         if isinstance(shape, str):
@@ -91,14 +104,16 @@ class ShapeNode:
                 name: child.to_schema(min_required_samples)
                 for name, child in sorted(self.props.items())
             }
-            if self.object_count >= max(min_required_samples, 1):
+            if not self.incomplete_object and self.object_count >= max(min_required_samples, 1):
                 required = sorted(
                     name for name, child in self.props.items() if child.total == self.object_count
                 )
                 if required:
                     schema["required"] = required
         if self.items is not None and self.items.total:
-            schema["items"] = self.items.to_schema(min_required_samples)
+            schema["items"] = (
+                {} if self.incomplete_items else self.items.to_schema(min_required_samples)
+            )
 
         ordered = [t for t in _TYPE_ORDER if t in types]
         if ordered:

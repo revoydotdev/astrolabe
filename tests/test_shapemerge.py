@@ -154,3 +154,24 @@ def test_coerce_converts_legacy_shapes_and_passes_schemas_through() -> None:
     converted = coerce_to_schema({"a": "str"})
     assert converted["properties"]["a"] == {"type": "string"}
     assert coerce_to_schema(None) == {}
+
+
+def test_native_null_and_truncation_markers_are_not_schema_fields():
+    from astrolabe.shapemerge import merge_shapes
+
+    marker = {"$astrolabe_truncated": {"reason": "depth_budget"}}
+    schema = merge_shapes([{"next": "null", "deep": marker}, {"next": "str", "deep": marker}])
+    assert schema["properties"]["next"]["type"] == ["string", "null"]
+    assert schema["properties"]["deep"] == {}
+    assert "$astrolabe_truncated" not in str(schema)
+
+
+def test_incomplete_array_and_object_do_not_manufacture_constraints():
+    from astrolabe.shapemerge import merge_shapes
+
+    array_marker = {"$astrolabe_truncated": {"reason": "array_sample_budget"}}
+    assert merge_shapes([["str", array_marker]])["items"] == {}
+    obj = {"x": "str", "$astrolabe_truncated": {"reason": "key_budget"}}
+    schema = merge_shapes([obj, obj])
+    assert "required" not in schema
+    assert set(schema["properties"]) == {"x"}
