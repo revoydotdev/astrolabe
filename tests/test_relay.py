@@ -340,3 +340,32 @@ def test_declared_operations_drop_identifiers_that_disagree():
         "agreed": [{"name": "Three", "operation_kind": "query", "source_sha256": "c" * 64}],
     }
     assert [item["name"] for item in catalog.declared_operations()] == ["Three"]
+
+
+def test_declared_operations_resolve_metas_export_indirection():
+    """Meta keeps the document and its id in separate modules.
+
+    Cataloguing only direct entries reported 12 operations from an Instagram bundle
+    that had yielded 858 artifacts, because most of its catalogue is reachable only
+    through the same indirection `bind` already resolves.
+    """
+    catalog = RelayCatalog()
+    catalog.references = [
+        {"name": "PolarisFeedQuery", "operation_kind": "query", "id_module": "mod-1"},
+        {"name": "PolarisLikeMutation", "operation_kind": "mutation", "id_module": "ambiguous"},
+    ]
+    catalog.exports = {
+        "mod-1": [{"id": "doc-1", "source_sha256": "a" * 64, "source_url": "https://cdn/x.js"}],
+        # Two ids behind one module proves nothing about which document is meant.
+        "ambiguous": [{"id": "doc-2", "source_sha256": "b" * 64}, {"id": "doc-3"}],
+    }
+    declared = catalog.declared_operations()
+    assert [(item["name"], item["id"]) for item in declared] == [("PolarisFeedQuery", "doc-1")]
+
+
+def test_a_reference_conflicting_with_a_direct_entry_is_dropped():
+    catalog = RelayCatalog()
+    catalog.entries = {"doc-1": [{"name": "One", "operation_kind": "query"}]}
+    catalog.references = [{"name": "Two", "operation_kind": "mutation", "id_module": "mod-1"}]
+    catalog.exports = {"mod-1": [{"id": "doc-1"}]}
+    assert catalog.declared_operations() == []

@@ -360,8 +360,29 @@ class RelayCatalog:
         execute anything. Ambiguous identifiers are dropped on the same terms `bind`
         refuses them: one identifier disagreeing about name or kind proves nothing.
         """
+        candidates: dict[str, list[dict[str, Any]]] = {
+            identifier: list(artifacts) for identifier, artifacts in self.entries.items()
+        }
+        # Meta keeps the document and its id in separate modules, so most of its
+        # catalogue is reachable only through the same export indirection `bind`
+        # resolves. Cataloguing `entries` alone reported twelve operations from an
+        # Instagram bundle that had produced 858 artifacts.
+        for reference in self.references:
+            exports = self.exports.get(reference["id_module"], [])
+            identifiers = {export["id"] for export in exports}
+            if len(identifiers) != 1:
+                continue
+            identifier = identifiers.pop()
+            candidates.setdefault(identifier, []).append(
+                {
+                    **reference,
+                    "id": identifier,
+                    "source_sha256": exports[0].get("source_sha256"),
+                    "source_url": exports[0].get("source_url"),
+                }
+            )
         declared: dict[tuple[str, str, str], dict[str, Any]] = {}
-        for identifier, artifacts in self.entries.items():
+        for identifier, artifacts in candidates.items():
             if len({(a["name"], a["operation_kind"]) for a in artifacts}) != 1:
                 continue
             for artifact in artifacts:

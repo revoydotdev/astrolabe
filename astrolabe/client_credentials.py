@@ -30,9 +30,12 @@ from typing import Any
 # credential word as a credential: `SetupPublicKeyCredential` is a WebAuthn operation
 # whose value is a persisted query id, not a secret. `public_key` is excluded outright
 # for the same reason — in a browser bundle it names WebAuthn, not an API credential.
+# `app_id` is excluded too: an application id is a public identifier, not a secret, and
+# on Meta bundles it holds ordinary component data. Astrolabe already draws that same
+# line elsewhere, recording public identifier names separately from secret ones.
 _CREDENTIAL_KEY = re.compile(
     rb"(x[_-]?)?(authorization|bearer([_-]?token)?|api[_-]?key|client[_-]?(key|token|secret)|"
-    rb"access[_-]?token|app[_-]?(id|key|token)|subscription[_-]?key|auth[_-]?token)",
+    rb"access[_-]?token|app[_-]?(key|token)|subscription[_-]?key|auth[_-]?token)",
     re.IGNORECASE,
 )
 

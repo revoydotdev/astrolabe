@@ -110,3 +110,10 @@ def test_finds_a_bearer_literal_a_minified_bundle_does_not_name():
 def test_a_bearer_and_a_named_key_holding_it_collapse_to_one_site():
     body = f'{{"authorization":"{BEARER}"}};x=()=>"Bearer {BEARER}";'.encode()
     assert len(discover(body, "https://cdn.example.com/main.js")) == 1
+
+
+@pytest.mark.parametrize("key", ["appId", "app_id", "APP_ID"])
+def test_an_application_id_is_a_public_identifier_not_a_credential(key):
+    # Seen on a real Instagram bundle, where `appId` holds ordinary component data.
+    body = f'{{"{key}":"{BEARER}"}}'.encode()
+    assert discover(body, "https://cdn.example.com/main.js") == []

@@ -544,25 +544,67 @@ def build_graphql_tools(
 
 # A declared operation's KIND is compiler evidence. Its CRUD subclass is only a reading
 # of the name, so it is reported beside its basis and never decides exposure.
-_CRUD_CREATE = re.compile(
-    r"^(create|add|new|generate|make|send|post|upload|insert|favorite|retweet|pin|"
-    r"bookmark|follow|subscribe|join|invite|enable)",
-    re.I,
+#
+# The verb is not reliably the first word. X writes `CreateTweet`, but Meta writes
+# `IGDirectAnimatedMediaSendMutation`, so reading only the prefix collapsed all 67
+# Instagram mutations into the update fallback. Whole words are compared, not
+# substrings, so `UpdatePinnedTimelines` is not read as a pin.
+_CRUD_CREATE = frozenset(
+    [
+        "create",
+        "add",
+        "new",
+        "generate",
+        "make",
+        "send",
+        "post",
+        "upload",
+        "insert",
+        "favorite",
+        "retweet",
+        "pin",
+        "bookmark",
+        "follow",
+        "subscribe",
+        "join",
+        "invite",
+        "enable",
+        "publish",
+        "share",
+        "submit",
+    ]
 )
-_CRUD_DELETE = re.compile(
-    r"^(delete|remove|destroy|clear|un[a-z]|leave|cancel|revoke|dismiss|hide|block|"
-    r"mute|disable|downvote)",
-    re.I,
+_CRUD_DELETE = frozenset(
+    [
+        "delete",
+        "remove",
+        "destroy",
+        "clear",
+        "leave",
+        "cancel",
+        "revoke",
+        "dismiss",
+        "hide",
+        "block",
+        "mute",
+        "disable",
+        "downvote",
+        "unpublish",
+    ]
 )
+# `Unfavorite`, `Unpin`, `Unsubscribe`: undoing anything is the delete side.
+_CRUD_UNDO = re.compile(r"^un[a-z]{3,}$", re.I)
+_WORDS = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+")
 _DECLARED_KINDS = {"query", "mutation", "subscription"}
 
 
 def crud_hint(name: str, operation_kind: str) -> str:
     if operation_kind == "query":
         return "read"
-    if _CRUD_DELETE.match(name):
+    words = [word.lower() for word in _WORDS.findall(re.sub(r"(Mutation|Query)$", "", name or ""))]
+    if any(word in _CRUD_DELETE or _CRUD_UNDO.match(word) for word in words):
         return "delete"
-    if _CRUD_CREATE.match(name):
+    if any(word in _CRUD_CREATE for word in words):
         return "create"
     return "update"
 

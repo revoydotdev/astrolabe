@@ -815,3 +815,27 @@ def test_capture_level_facts_survive_a_graph_backed_generation(tmp_path):
     pack = build_pack(str(tmp_path))
     assert [item["name"] for item in pack["declared_operations"]] == ["DeleteTweet"]
     assert pack["client_credentials"][0]["key"] == "authorization"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # Meta names the verb last, which prefix matching missed entirely.
+        ("IGDirectAnimatedMediaSendMutation", "create"),
+        ("PolarisPostDeleteMutation", "delete"),
+        ("IGDMediaForwardPublisherMutation", "update"),
+        ("CometTS2BitArrayLoggerMutation", "update"),
+        # X names it first; both conventions must land the same way.
+        ("CreateTweet", "create"),
+        ("DeleteBookmark", "delete"),
+        ("UnfavoriteTweet", "delete"),
+        ("UnsubscribeFromThing", "delete"),
+        # Whole words only: this is an update, not a pin.
+        ("UpdatePinnedTimelines", "update"),
+        ("ModerateTweet", "update"),
+    ],
+)
+def test_crud_hint_reads_the_verb_wherever_the_convention_puts_it(name, expected):
+    from astrolabe.mcpgen import crud_hint
+
+    assert crud_hint(name, "mutation") == expected
