@@ -62,6 +62,23 @@ def test_unrelated_header_not_detected(capture):
     assert capture.is_auth_header("content-type") is False
 
 
+def test_persisted_paths_exclude_legacy_rest_graphql_names(capture):
+    assert capture.persisted_path(
+        "https://x.com/i/api/graphql/id_123/HomeTimeline?variables=x"
+    ) == ("id_123", "HomeTimeline")
+    assert capture.persisted_path("https://x.com/i/api/1.1/graphql/viewer_context.json") is None
+
+
+def test_stream_response_never_waits_for_body(capture):
+    class Stream:
+        headers = {"content-type": "text/event-stream"}
+
+        def body(self):
+            pytest.fail("capture tried to buffer an open event stream")
+
+    assert capture.response_payload(Stream(), 1024) is None
+
+
 def test_graphql_entries_parse_batches_and_preserve_selected_member(capture):
     document = "query A { a } query B($id: ID!) { renamed: b(id: $id) }"
     entries = capture.graphql_entries(
@@ -593,3 +610,15 @@ def test_settle_ceiling_derived_from_wait_when_not_overridden(capture):
     )
     assert settled is False
     assert elapsed == pytest.approx(6.0, abs=0.2)
+
+
+def test_graphql_json_in_javascript_media_type_is_decoded(capture):
+    class Response:
+        headers = {"content-type": "text/javascript; charset=utf-8"}
+
+        def body(self):
+            return b'for (;;);{"data":{"viewer":{"id":"private"}}}'
+
+    assert capture.response_payload(Response(), 10000) is None
+    decoded = capture.response_payload(Response(), 10000, graphql=True)
+    assert decoded.value == {"data": {"viewer": {"id": "private"}}}

@@ -23,6 +23,14 @@ try:
     from astrolabe.graphql_doc import parse_graphql_document
     from astrolabe.media import classify_media
     from astrolabe.operation import graphql_protocol
+    from astrolabe.persisted import (
+        RECOVERY_INIT_SCRIPT,
+        RECOVERY_READ_SCRIPT,
+        bind_document,
+        graphql_response_success,
+    )
+    from astrolabe.relay import RelayCatalog, MAX_SCRIPT_BYTES, MAX_SCRIPTS
+    from astrolabe.payloads import decode_payload
     from astrolabe.security import (
         atomic_write_json,
         atomic_write_text,
@@ -38,6 +46,14 @@ except ImportError:  # standalone deployment on the capture host
     from graphql_doc import parse_graphql_document  # type: ignore[import-not-found,no-redef]
     from media import classify_media  # type: ignore[import-not-found,no-redef]
     from operation import graphql_protocol  # type: ignore[import-not-found,no-redef]
+    from persisted import (  # type: ignore[import-not-found,no-redef]
+        RECOVERY_INIT_SCRIPT,
+        RECOVERY_READ_SCRIPT,
+        bind_document,
+        graphql_response_success,
+    )
+    from relay import RelayCatalog, MAX_SCRIPT_BYTES, MAX_SCRIPTS  # type: ignore[import-not-found,no-redef]
+    from payloads import decode_payload  # type: ignore[import-not-found,no-redef]
     from security import (  # type: ignore[import-not-found,no-redef]
         atomic_write_json,
         atomic_write_text,
@@ -207,6 +223,26 @@ def graphql_entries(payload, live_url, media_type):
         }
         for item in parse_graphql_document(query, selected_name)
     ]
+
+
+def persisted_path(url):
+    """Recognize exactly /graphql/<identifier>/<operation>, not legacy REST paths."""
+    match = re.search(r"/graphql/([^/]+)/([_A-Za-z][_0-9A-Za-z]*)$", up.urlparse(url).path)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def response_payload(response, max_bytes, *, graphql=False):
+    """Never wait for an unbounded stream or parse document/static responses as APIs."""
+    media_type = response.headers.get("content-type", "")
+    kind = media_type.split(";", 1)[0].lower()
+    if kind in {"text/event-stream", "text/html"} or (
+        not graphql and kind in {"application/javascript", "text/javascript"}
+    ):
+        return None
+    raw = response.body()
+    if not raw.strip():
+        return None
+    return decode_payload(raw, media_type=media_type, max_bytes=max_bytes)
 
 
 def admit_request(
@@ -597,6 +633,11 @@ def main():
     ap.add_argument("--skip-recipe-surfaces", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--rate-stop-dir", help=argparse.SUPPRESS)
     ap.add_argument("--crawl", type=int, default=0, help="follow N same-origin nav links")
+    ap.add_argument(
+        "--block-assets",
+        action="store_true",
+        help="skip images, media, and fonts to preserve the API request budget",
+    )
     ap.add_argument("--base-domain", required=True)
     ap.add_argument("--proxy", default=None)
     ap.add_argument("--byparr", default=None, help="byparr /v1 endpoint for CF fallback")
@@ -604,6 +645,11 @@ def main():
     ap.add_argument("--run-id", help="caller-generated identity used to reject stale transfers")
     ap.add_argument("--har", action="store_true")
     ap.add_argument("--introspect", action="store_true")
+    ap.add_argument(
+        "--recover-persisted",
+        action="store_true",
+        help="recover exact APQ documents from browser Web Crypto hash inputs",
+    )
     ap.add_argument("--shape-max-depth", type=int, default=8)
     ap.add_argument("--shape-max-nodes", type=int, default=1000)
     ap.add_argument("--shape-max-keys", type=int, default=200)
@@ -769,13 +815,19 @@ def main():
     # terminated run always leaves the full request stream on disk — the capture is
     # no longer all-or-nothing.
     jf = open(os.path.join(a.outdir, "capture.jsonl"), "w")
+    relay_catalog = RelayCatalog()
 
     kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
     ctx = launch_context(**kw)
+    if a.recover_persisted:
+        ctx.add_init_script(RECOVERY_INIT_SCRIPT)
     ctx.set_default_navigation_timeout(45000)
 
     def enforce_request_budget(route):
         request = route.request
+        if a.block_assets and request.resource_type in {"image", "media", "font"}:
+            route.abort("blockedbyclient")
+            return
         parsed = up.urlparse(request.url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         try:
@@ -825,10 +877,36 @@ def main():
         ctx.add_cookies(json.load(open(a.cookies)))
 
     def on_response(resp):
+        if jf.closed:
+            return
         try:
             req = resp.request
             live_url = req.url.split("#")[0]
             url = safe_url(live_url)
+            if a.recover_persisted and req.resource_type == "script":
+                # Inspect only scripts already loaded by an authorized HTTPS page.
+                # CDN origins are allowed here; no credential forwarding or extra fetch.
+                try:
+                    frame_url = req.frame.url
+                except Exception:
+                    return  # Service-worker scripts have no authorized page frame.
+                if (
+                    live_url.startswith("https://")
+                    and _first_party(frame_url)
+                    and resp.status == 200
+                    and not relay_catalog.exhausted
+                ):
+                    length = resp.headers.get("content-length")
+                    if relay_catalog.scripts >= MAX_SCRIPTS or (
+                        length and int(length) > MAX_SCRIPT_BYTES
+                    ):
+                        relay_catalog.exhausted = True
+                    else:
+                        try:
+                            relay_catalog.add(resp.body(), live_url)
+                        except Exception:
+                            return  # A navigated-away CDN body supplies no usable evidence.
+                return
             if req.resource_type not in ("xhr", "fetch") and not API_HINT.search(live_url):
                 return
             if not _first_party(live_url):
@@ -882,7 +960,7 @@ def main():
                 # gzip/binary bodies (e.g. 0x8b gzip magic). Skip the body
                 # but keep recording the rest of the request instead of
                 # letting the exception drop the whole record.
-                body = None
+                body = getattr(req, "post_data_buffer", None)
                 record_failure("request-body", "body-decode", exc, context=url)
             if body:
                 rec.update(
@@ -896,7 +974,15 @@ def main():
                     )
                 )
                 try:
-                    j = json.loads(body)
+                    raw_request = body if isinstance(body, bytes) else body.encode("utf-8")
+                    decoded_request = decode_payload(
+                        raw_request,
+                        media_type=req.headers.get("content-type", ""),
+                        content_encoding=req.headers.get("content-encoding", ""),
+                        max_bytes=a.body_max_bytes,
+                    )
+                    j = decoded_request.value
+                    rec["request_packaging"] = list(decoded_request.layers)
                     payloads = j if isinstance(j, list) else [j]
                     ops = []
                     for p in payloads:
@@ -915,6 +1001,11 @@ def main():
                                 )
                             )
                     if ops:
+                        if list(decoded_request.layers) != ["json"]:
+                            for operation in ops:
+                                operation.setdefault("request_template", {})[
+                                    "payload_packaging"
+                                ] = list(decoded_request.layers)
                         rec["graphql"] = ops
                         path = up.urlparse(url).path
                         ge = gql_endpoints.setdefault(path, {"count": 0})
@@ -925,6 +1016,8 @@ def main():
                     # fields instead of a JSON body. json.loads fails on these;
                     # parse the form fields to extract the persisted doc_id and
                     # the variable shape so the GraphQL surface isn't invisible.
+                    if isinstance(body, bytes):
+                        body = body.decode("utf-8", "replace")
                     if (
                         "doc_id=" in body
                         or "query_hash=" in body
@@ -994,10 +1087,10 @@ def main():
                     gql_endpoints.setdefault(path, {"count": 0})["count"] += 1
             # Path-style GraphQL (e.g. X: GET /i/api/graphql/<queryId>/<OpName>?variables=..;
             # POST bodies with {queryId,variables} but no "query"/"operationName" key).
-            if "graphql" not in rec and "/graphql/" in up.urlparse(url).path:
+            path_operation = persisted_path(url)
+            if "graphql" not in rec and path_operation:
                 segs = [s for s in up.urlparse(url).path.split("/") if s]
-                opname = segs[-1] if segs else None
-                qid = segs[-2] if len(segs) >= 2 else None
+                qid, opname = path_operation
                 vobj = None
                 request_template = {}
                 if body:
@@ -1051,9 +1144,49 @@ def main():
                     ]
                     norm = "/" + "/".join(segs[:-2]) if len(segs) >= 2 else up.urlparse(url).path
                     gql_endpoints.setdefault(norm, {"count": 0})["count"] += 1
-            if "json" in resp.headers.get("content-type", "") and resp.status < 400:
+            if a.recover_persisted and rec.get("graphql"):
                 try:
-                    rec["resp_shape"] = shape(resp.json())
+                    hashes = [
+                        o["persistedHash"]
+                        for o in rec["graphql"]
+                        if o.get("protocol") == "graphql-apq" and o.get("persistedHash")
+                    ]
+                    candidates = req.frame.evaluate(RECOVERY_READ_SCRIPT, hashes)
+                    documents = {c["hash"]: c.get("document") for c in candidates}
+                    rec["graphql"] = [
+                        bind_document(
+                            o,
+                            documents.get(o.get("persistedHash")),
+                            source_url=req.frame.url,
+                            observed_at=datetime.now(UTC).isoformat(),
+                        )
+                        for o in rec["graphql"]
+                    ]
+                except Exception as exc:
+                    record_failure("persisted-recovery", "browser", exc, context=url)
+            if resp.status < 400 and resp.status != 204:
+                try:
+                    # GraphQL is sometimes JSON served as text/plain. Transport evidence,
+                    # not MIME alone, authorizes parsing; keep only bounded structural data.
+                    decoded = response_payload(
+                        resp, a.body_max_bytes, graphql=bool(rec.get("graphql"))
+                    )
+                    response_value = decoded.value if decoded is not None else None
+                    if decoded is not None:
+                        rec["response_packaging"] = list(decoded.layers)
+                        rec["resp_shape"] = shape(response_value)
+                    if rec.get("graphql"):
+                        rec["graphql_response_success"] = graphql_response_success(
+                            response_value, rec["graphql"]
+                        )
+                        for operation in rec["graphql"]:
+                            evidence = (operation.get("request_template") or {}).get(
+                                "document_evidence"
+                            )
+                            if evidence:
+                                evidence["observed_response_success"] = rec[
+                                    "graphql_response_success"
+                                ]
                 except Exception as exc:
                     record_failure("response-body", "body-decode", exc, context=url)
             rec["response_kind"] = classify_media(
@@ -1061,6 +1194,8 @@ def main():
                 rec.get("rtype"),
                 graphql="graphql" in rec,
             ).value
+            if jf.closed:
+                return  # A browser callback may have been pending when shutdown began.
             jf.write(json.dumps(rec) + "\n")
             jf.flush()
             stats["n"] += 1
@@ -1266,6 +1401,8 @@ def main():
                 except Exception as e:
                     record_failure("challenge", "challenge", e, context=url, partial=True)
                     log(f"[byparr-ERR] {safe_text(e)}")
+            if cf_blocked():
+                raise RuntimeError("challenge_unresolved after browser/Byparr flow")
             if page.url and not _first_party(page.url):
                 raise ValueError("navigation redirected outside the allowed origin set")
             log(f"[visit] {url} -> {page.url.split('?')[0]} | {(page.title() or '')[:60]}")
@@ -1331,6 +1468,13 @@ def main():
                 },
                 "surfaces": surfaces,
                 "records": stats["n"],
+                "persisted_recovery": {
+                    "enabled": a.recover_persisted,
+                    "method": "browser-webcrypto-sha256",
+                    "relay_scripts": relay_catalog.scripts,
+                    "relay_artifacts": relay_catalog.count,
+                    "relay_budget_exhausted": relay_catalog.exhausted,
+                },
                 "truncations": dict(SHAPE_TRUNCATIONS),
                 "failures": failures,
                 "failure_summary": summarize_failures(failures),
@@ -1385,6 +1529,10 @@ def main():
         run_state["partial"] = True
         run_state["completed_at"] = datetime.now(UTC).isoformat()
         record_failure("capture", "cancellation", RuntimeError(f"signal {signum}"), partial=True)
+        try:
+            ctx.remove_listener("response", on_response)
+        except Exception:
+            pass  # A closing browser must not prevent partial-artifact flushing.
         flush_meta()
         try:
             jf.close()
@@ -1668,6 +1816,10 @@ def main():
     except Exception as exc:
         record_failure("offline-queue", "browser", exc)
     run_state["completed_at"] = datetime.now(UTC).isoformat()
+    try:
+        ctx.remove_listener("response", on_response)
+    except Exception:
+        pass
     flush_meta()
     try:
         jf.close()
@@ -1679,6 +1831,9 @@ def main():
         f"ws={len(ws_catalog)} socket(s)/{ws_events} events"
     )
     ctx.close()
+    if a.recover_persisted:
+        relay_catalog.enrich_capture(os.path.join(a.outdir, "capture.jsonl"))
+        flush_meta()  # Recompute transfer checksums after metadata enrichment.
 
 
 if __name__ == "__main__":
