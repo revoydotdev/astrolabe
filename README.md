@@ -28,7 +28,14 @@ call it makes, and hands the traffic to a local analysis pipeline:
   tracked over time, with optional active re-verification
 - **mcp-gen** — generate a typed [MCP](https://modelcontextprotocol.io)
   toolpack from a capture, so an agent can call the site's own API directly
-  instead of scraping HTML
+  instead of scraping HTML. An operation astrolabe re-executed and failed is
+  withdrawn rather than shipped as a working tool; `--require-active-proof`
+  exposes only what it re-executed successfully
+- **inventory** — catalogue every operation the client's own compiler output
+  declares, not only the ones a walk happened to trigger. A read-only walk
+  never fires a delete, so the writes a site supports stay visible without
+  becoming callable: declared operations carry no request and the validator
+  refuses them if they ever do
 - **scan** — a deterministic, evidence-grounded source scan (sitemap, DOM,
   service worker, bundle/chunk-manifest mining) that scaffolds a per-site
   recipe from what it actually found, not from guesses

@@ -789,6 +789,14 @@ def build_pack(
             inv = json.load(fh)
     if not inv.get("base_domain"):
         raise GenerationError("endpoints.json has no base_domain")
+    # The graph models observed operations, so capture-level facts about the client
+    # itself do not survive a round trip through it. Read those from the inventory
+    # directly, or a graph-backed generation silently drops them.
+    if os.path.exists(inv_path):
+        with open(inv_path, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        for key in ("declared_operations", "client_credentials"):
+            inv.setdefault(key, inventory.get(key) or [])
     apply_protocol_overrides(capture_dir, inv)
 
     noise = DEFAULT_NOISE

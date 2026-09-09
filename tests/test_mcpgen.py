@@ -782,3 +782,36 @@ def test_gating_never_re_exposes_an_already_gated_tool():
     tools = _gated()
     assert tools["AlreadyGated"]["exposed"] is False
     assert tools["AlreadyGated"]["reason"] == "mutation — gated (write op)"
+
+
+def test_capture_level_facts_survive_a_graph_backed_generation(tmp_path):
+    """A graph models observed operations, so facts about the client itself are not in it.
+
+    Generation prefers the graph whenever one exists, which is always after a map, so
+    reading these only from the graph dropped them from every real toolpack.
+    """
+    _write_capture(tmp_path, gql_ops={"feed": _op("query", "Feed")})
+    inventory = json.loads((tmp_path / "endpoints.json").read_text())
+    inventory["declared_operations"] = [
+        {"name": "DeleteTweet", "operation_kind": "mutation", "id": "abc", "observed": False}
+    ]
+    inventory["client_credentials"] = [
+        {
+            "key": "authorization",
+            "source_url": "https://cdn.example.com/main.js",
+            "source_sha256": "a" * 64,
+            "value_sha256": "b" * 64,
+            "value_length": 104,
+        }
+    ]
+    (tmp_path / "endpoints.json").write_text(json.dumps(inventory))
+    from astrolabe.ir import graph_from_inventory, write_graph
+
+    records = [json.loads(line) for line in (tmp_path / "capture.jsonl").read_text().splitlines()]
+    write_graph(
+        str(tmp_path / "graph.json"),
+        graph_from_inventory(inventory, records, {"base_domain": "example.com"}),
+    )
+    pack = build_pack(str(tmp_path))
+    assert [item["name"] for item in pack["declared_operations"]] == ["DeleteTweet"]
+    assert pack["client_credentials"][0]["key"] == "authorization"
