@@ -34,8 +34,10 @@ from astrolabe.mcp_server import (
     RemoteBoundaryMiddleware,
     RemoteHTTPProfile,
     Runtime,
+    SemanticKind,
     Settings,
     _parser,
+    _provider_specs,
     _remote_auth,
     _remote_profile,
     _safe_headers,
@@ -74,6 +76,50 @@ DISCOVERY_TOOLS = {
     "invoke_query",
     "subscribe_events",
 }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "success", "validated"),
+    [
+        ({"data": {"jobs": []}, "_astrolabe": {"schema_validated": True}}, True, True),
+        ({"error_code": "BAD_ARGUMENTS", "ok": False}, False, False),
+        (
+            {
+                "data": {},
+                "errors": [{"message": "failed"}],
+                "_astrolabe": {"schema_validated": True, "partial": True},
+            },
+            False,
+            True,
+        ),
+    ],
+)
+async def test_verify_operation_reports_actual_proof(
+    configured, monkeypatch, response, success, validated
+):
+    async def execute(self, tool, arguments):
+        return response
+
+    monkeypatch.setattr(Runtime, "execute", execute)
+    settings, _ = configured
+    async with Client(create_server(settings)) as client:
+        result = await client.call_tool(
+            "verify_operation",
+            {
+                "operation_id": "jobSearch",
+                "arguments": {},
+            },
+        )
+    assert result.data["ok"] is success
+    assert result.data["proof"]["success"] is success
+    assert result.data["proof"]["schema_validated"] is validated
+    journal = settings.toolpack_path.with_name("verification.jsonl")
+    recorded = json.loads(journal.read_text())
+    assert recorded["proof"]["success"] is success
+    assert "result" not in recorded
+    assert "arguments" not in recorded
+    assert result.data["proof_recorded"] is True
 
 
 def _named_tool(tools: list[Any], name: str) -> Any:
@@ -268,6 +314,49 @@ async def test_missing_scoped_auth_fails_without_fallback(configured) -> None:
     result = await runtime.execute(tool, {})
     assert result["error_code"] == "NO_BEARER"
     assert "jobSearch" not in result["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_semantic_kind_is_never_listed_or_executed(tmp_path, pack) -> None:
+    """A persisted operation whose kind was never classified stays inventory-only.
+
+    This is the gate that carries every X/Instagram persisted operation recovered
+    without a document: the request URL is known but the query text is not, so the
+    read/write distinction is unproven. Enabling mutations must not unlock it --
+    an unclassified operation is not a mutation that the operator has approved.
+    """
+    pack["tools"].append(
+        {
+            "name": "DataSaverMode",
+            "description": "persisted operation recovered without a document",
+            "input_schema": {"type": "object", "properties": {}},
+            "operation": "DataSaverMode",
+            "alias": "dataSaverMode",
+            "type": SemanticKind.UNKNOWN.value,
+            "semantic_kind": SemanticKind.UNKNOWN.value,
+            "transport": "graphql",
+            "protocol": "graphql-x-persisted",
+            "query": "",
+            "apq_hash": "Synth3ticQueryId_00A",
+            "apq_fallback_allowed": False,
+            "request_url": "https://api.example.com/i/api/graphql/xF6sXn/DataSaverMode",
+            "exposed": False,
+        }
+    )
+    pack_path = tmp_path / "pack.json"
+    pack_path.write_text(json.dumps(pack))
+    settings = Settings(pack_path, retries=1)
+    runtime = Runtime(settings, _validate_pack(pack, settings))
+    tool = runtime.pack["tools"][-1]
+
+    assert "dataSaverMode" not in {t["alias"] for t in _provider_specs(runtime.pack, settings)}
+    assert (await runtime.execute(tool, {}))["error_code"] == "UNKNOWN_SEMANTIC_KIND"
+
+    # The mutation flag is a separate gate; it must not double as a bypass here.
+    permissive = dataclasses.replace(settings, allow_mutations=True)
+    assert "dataSaverMode" not in {t["alias"] for t in _provider_specs(runtime.pack, permissive)}
+    runtime.settings = permissive
+    assert (await runtime.execute(tool, {}))["error_code"] == "UNKNOWN_SEMANTIC_KIND"
 
 
 @pytest.mark.asyncio
@@ -1357,6 +1446,7 @@ def test_file_provider_accepts_valid_v2_origin_scope_and_binding(tmp_path) -> No
                 "credentials": {
                     "jobSearch": {
                         "headers": {"authorization": "Bearer SECRET"},
+                        "form_fields": {"fb_dtsg": "FORM_SECRET"},
                         "operation_scope": ["jobSearch"],
                         "target_origin": "https://api.example.com",
                         "session_binding": generation,
@@ -1369,6 +1459,12 @@ def test_file_provider_accepts_valid_v2_origin_scope_and_binding(tmp_path) -> No
         auth, expected_origins={"jobSearch": "https://api.example.com/graphql"}
     )
     assert provider.get("jobSearch") == {"authorization": "Bearer SECRET"}
+    assert provider.get_with_form_fields("jobSearch") == (
+        {"authorization": "Bearer SECRET"},
+        {"fb_dtsg": "FORM_SECRET"},
+    )
+    assert provider.get_with_form_fields("another") == (None, {})
+    assert "FORM_SECRET" not in json.dumps(provider.status(), default=str)
 
 
 @pytest.mark.asyncio
@@ -2410,3 +2506,64 @@ async def test_remote_boundary_rate_limits_and_never_audits_bearer_values(
     records = [json.loads(line) for line in profile.audit_log.read_text().splitlines()]
     assert any(record.get("status") == 429 and record.get("rate_limited") for record in records)
     assert secret not in profile.audit_log.read_text()
+
+
+def test_runtime_revalidates_relay_metadata_and_rejects_removed_evidence(tmp_path, pack):
+    from astrolabe.relay import RelayCatalog
+
+    catalog = RelayCatalog()
+    catalog.add(
+        b'const q={kind:"Request",params:{id:"987654321",name:"JobSearch",operationKind:"query"}};',
+        "https://cdn.example.com/app.js",
+    )
+    entry = catalog.bind(
+        {
+            "protocol": "graphql-meta-doc-id",
+            "persistedHash": "987654321",
+            "operationName": "JobSearch",
+        },
+        True,
+    )
+    tool = pack["tools"][0]
+    tool.update(
+        query="",
+        apq_hash="987654321",
+        protocol="graphql-meta-doc-id",
+        parse_confidence="compiler-metadata",
+        request_template=entry["request_template"],
+    )
+    settings = Settings(tmp_path / "pack.json", allow_anonymous=True)
+    _validate_pack(pack, settings)
+    tool["request_template"]["relay_evidence"]["id"] = "different"
+    with pytest.raises(ConfigurationError, match="Relay evidence"):
+        _validate_pack(pack, settings)
+    tool["request_template"] = {}
+    with pytest.raises(ConfigurationError, match="Relay evidence"):
+        _validate_pack(pack, settings)
+
+
+@pytest.mark.asyncio
+async def test_meta_form_credentials_are_injected_only_into_meta_body(configured, monkeypatch):
+    _, runtime = configured
+    provider = runtime._credential_provider
+    monkeypatch.setattr(
+        provider,
+        "get_with_form_fields",
+        lambda alias: ({"x-csrftoken": "header-secret"}, {"fb_dtsg": "form-secret", "__a": "1"}),
+    )
+    captured = {}
+
+    def request(*args):
+        captured.update(headers=args[2], body=args[3])
+        return {"data": {"jobs": []}, "_astrolabe": {"http_status": 200}}
+
+    monkeypatch.setattr(runtime, "_request", request)
+    tool = runtime.pack["tools"][0]
+    tool.update(query="", apq_hash="987654321", protocol="graphql-meta-doc-id")
+    await runtime.execute(tool, {"page": 1})
+    assert captured["body"]["fb_dtsg"] == "form-secret"
+    assert captured["body"]["doc_id"] == "987654321"
+    assert "form-secret" not in json.dumps(captured["headers"])
+    tool.update(protocol="graphql-inline", query="query JobSearch($page:Int){jobs(page:$page)}")
+    await runtime.execute(tool, {"page": 1})
+    assert "form-secret" not in json.dumps(captured)

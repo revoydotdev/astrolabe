@@ -100,13 +100,17 @@ class GenerationError(RuntimeError):
 
 
 def shape_to_schema(v: Any) -> dict[str, Any]:
+    if isinstance(v, dict) and set(v) == {"$astrolabe_truncated"}:
+        return {}
     if isinstance(v, dict):
-        props = {k: shape_to_schema(x) for k, x in v.items()}
+        props = {k: shape_to_schema(x) for k, x in v.items() if k != "$astrolabe_truncated"}
         return {"type": "object", "properties": props}
     if isinstance(v, list):
         return {"type": "array", "items": shape_to_schema(v[0])} if v else {"type": "array"}
     if isinstance(v, str) and v in TYPEMAP:
         return {"type": TYPEMAP[v]}
+    if v == "null":
+        return {"type": "null"}
     return {}  # unknown / any
 
 
@@ -368,7 +372,7 @@ def build_graphql_tools(
     tools = []
     proof = proof or {}
     for alias, meta in (inv.get("graphql_operations") or {}).items():
-        q = overrides.get(alias) or qtext.get(alias, "")
+        q = overrides.get(alias) or qtext.get(alias, "") or meta.get("query") or ""
         op = meta.get("operation")
         parsed_document = parse_graphql_document(q, op) if q else []
         if q and not any(item.selected for item in parsed_document) and len(parsed_document) == 1:
@@ -405,6 +409,8 @@ def build_graphql_tools(
             in_schema = schema_index.enrich(in_schema)
 
         reason = None
+        document_evidence = (meta.get("request_template") or {}).get("document_evidence")
+        relay_evidence = (meta.get("request_template") or {}).get("relay_evidence")
         lifecycle_status = meta.get("lifecycle_status")
         if lifecycle_status and lifecycle_status != "current":
             reason = f"operation lifecycle is {lifecycle_status}; inventoried but not current"
@@ -412,6 +418,12 @@ def build_graphql_tools(
             reason = "GraphQL document required tolerant parsing; inventoried at low confidence"
         elif typ == SemanticKind.UNKNOWN.value:
             reason = "unknown semantic kind — inventoried only until trusted evidence classifies it"
+        elif document_evidence and not document_evidence.get("observed_response_success"):
+            reason = "recovered document lacks a successful observed GraphQL response"
+        elif relay_evidence and not relay_evidence.get("observed_response_success"):
+            reason = "recovered Relay metadata lacks a successful observed GraphQL response"
+        elif (meta.get("request_template") or {}).get("payload_packaging"):
+            reason = "packaged request decoded for inventory; exact replay adapter required"
         elif typ == SemanticKind.SUBSCRIPTION.value:
             reason = "subscription is not supported by the request runtime"
         elif typ == SemanticKind.MUTATION.value and not include_mutations:
@@ -449,6 +461,7 @@ def build_graphql_tools(
                 "request_url": meta.get("request_url"),
                 "request_template": meta.get("request_template") or {},
                 "protocol_source": meta.get("protocol_source"),
+                "document_evidence": document_evidence,
                 "parse_confidence": meta.get("parse_confidence"),
                 "description": (
                     f"GraphQL {typ} '{op or alias}' on {inv['base_domain']}. "

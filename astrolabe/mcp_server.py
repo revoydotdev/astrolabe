@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import functools
+import hashlib
 import contextlib
 import json
 import math
@@ -54,6 +55,7 @@ from .credentials import (
     inspect_credentials,
 )
 from .graphql_doc import parse_graphql_document
+from .payloads import decode_payload
 from .event_runtime import EventAdapterError, subscribe_channel, validate_event_channel
 from .ir import load_graph
 from .operation import Protocol, SemanticKind
@@ -714,6 +716,8 @@ def _validate_pack(raw: Any, settings: Settings) -> dict[str, Any]:
             raise ConfigurationError(f"tool {name!r} has unsupported operation type")
         if tool["type"] == SemanticKind.UNKNOWN.value and tool.get("exposed"):
             raise ConfigurationError(f"tool {name!r} cannot expose an unknown semantic kind")
+        if tool.get("exposed") and (tool.get("request_template") or {}).get("payload_packaging"):
+            raise ConfigurationError(f"tool {name!r} has no exact packaged-request replay adapter")
         protocol = tool.get("protocol")
         if protocol is None:
             if transport == "rest":
@@ -747,6 +751,26 @@ def _validate_pack(raw: Any, settings: Settings) -> dict[str, Any]:
             r"[0-9a-fA-F]{64}", str(tool.get("apq_hash") or "")
         ):
             raise ConfigurationError(f"tool {name!r} has an invalid Apollo APQ SHA-256 hash")
+        if tool.get("document_evidence") and tool.get("exposed"):
+            evidence = tool["document_evidence"]
+            query = tool.get("query") or ""
+            digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
+            if (
+                protocol != Protocol.GRAPHQL_APQ.value
+                or digest != str(tool.get("apq_hash") or "").lower()
+                or evidence.get("sha256") != digest
+                or evidence.get("binding") != "exact-sha256"
+                or evidence.get("observed_response_success") is not True
+            ):
+                raise ConfigurationError(f"tool {name!r} has invalid recovered document evidence")
+        if (
+            tool.get("parse_confidence") == "compiler-metadata"
+            or (tool.get("request_template") or {}).get("relay_evidence")
+        ) and tool.get("exposed"):
+            from .relay import valid_evidence
+
+            if not valid_evidence(tool):
+                raise ConfigurationError(f"tool {name!r} has invalid recovered Relay evidence")
         if protocol == Protocol.GRAPHQL_VENDOR_PERSISTED.value and tool.get("exposed"):
             raise ConfigurationError(
                 f"tool {name!r} exposes a persisted protocol without a reviewed adapter"
@@ -1104,6 +1128,10 @@ class CredentialProvider(ABC):
     def get(self, alias: str) -> dict[str, Any] | None:
         """Return the current credential record for `alias`, or None if unavailable."""
 
+    def get_with_form_fields(self, alias: str) -> tuple[dict[str, Any] | None, dict[str, str]]:
+        """One credential snapshot; form fields never become headers or tool arguments."""
+        return self.get(alias), {}
+
     @abstractmethod
     def load_all(self) -> dict[str, Any]:
         """Return every currently known alias -> credential record.
@@ -1186,6 +1214,13 @@ class FileCredentialProvider(CredentialProvider):
         self._refresh_generation_results: dict[str, bool] = {}
 
     def load_all(self) -> dict[str, Any]:
+        return self._load_all()
+
+    def get_with_form_fields(self, alias: str) -> tuple[dict[str, Any] | None, dict[str, str]]:
+        record = self._load_all(include_form_fields=True).get(alias, {})
+        return record.get("headers"), dict(record.get("form_fields") or {})
+
+    def _load_all(self, *, include_form_fields: bool = False) -> dict[str, Any]:
         """Atomically re-read short-lived per-operation credentials for every call."""
         if self._auth_path is None:
             return {}
@@ -1228,7 +1263,11 @@ class FileCredentialProvider(CredentialProvider):
             if reason:
                 rejected[alias] = reason
             else:
-                accepted[alias] = record["headers"]
+                accepted[alias] = (
+                    {"headers": record["headers"], "form_fields": record.get("form_fields", {})}
+                    if include_form_fields
+                    else record["headers"]
+                )
         self._rejected_records = rejected
         self._last_load_error = (
             "; ".join(f"{alias}: {reason}" for alias, reason in sorted(rejected.items()))
@@ -1704,7 +1743,7 @@ class Runtime:
         if not validation["valid"]:
             return _failure("BAD_ARGUMENTS", json.dumps(validation["errors"]))
         with self._generation_lock:
-            auth = self._credential_provider.get(alias)
+            auth, auth_form_fields = self._credential_provider.get_with_form_fields(alias)
             self._reload_cookies_if_changed()
             provider_status = self._credential_provider.status()
             cookie_generation = self._cookie_generation
@@ -1722,6 +1761,16 @@ class Runtime:
         headers = _safe_headers(auth)
         try:
             method, url, body, params = self._build_request(tool, arguments, headers)
+            if tool.get("protocol") == Protocol.GRAPHQL_META_DOC_ID.value and auth_form_fields:
+                if method != "POST" or not isinstance(body, dict):
+                    raise ConfigurationError(
+                        "Meta authentication form requires POST form transport"
+                    )
+                from .credentials import META_AUTH_FORM_FIELDS
+
+                if any(key not in META_AUTH_FORM_FIELDS for key in auth_form_fields):
+                    raise ConfigurationError("unsupported authentication form field")
+                body.update(auth_form_fields)
         except ConfigurationError as exc:
             return _failure("BAD_ARGUMENTS", str(exc))
         with self._state_lock:
@@ -2127,10 +2176,19 @@ class Runtime:
                     time.sleep(_retry_delay(attempt, response.headers.get("retry-after")))
                     continue
                 try:
+                    decoded = (
+                        decode_payload(
+                            raw,
+                            media_type=str(response.headers.get("content-type") or ""),
+                            max_bytes=self.settings.max_response_bytes,
+                        )
+                        if raw
+                        else None
+                    )
                     payload = (
                         None
                         if status == 204 and not raw
-                        else (json.loads(raw) if raw else response.json())
+                        else (decoded.value if decoded is not None else response.json())
                     )
                 except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
                     return _failure(
@@ -2143,6 +2201,7 @@ class Runtime:
                     "http_status": status,
                     "duration_ms": round((time.monotonic() - started) * 1000, 1),
                     "attempts": attempt + 1,
+                    "response_packaging": list(decoded.layers) if decoded is not None else [],
                 }
                 # An upstream failure is a tool failure. Reporting a 401/429/5xx as a
                 # successful result lets an agent treat an expired token or a rate-limit
@@ -2722,17 +2781,64 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         if tool is None or tool.get("type") != SemanticKind.QUERY.value:
             return _failure("OPERATION_NOT_INVOCABLE", "operation is not an executable query")
         result = await runtime.execute(tool, arguments)
-        return {
-            "ok": result.get("ok") is True,
+        schema_validated = (result.get("_astrolabe") or {}).get("schema_validated") is True
+        success = (
+            schema_validated
+            and not result.get("error_code")
+            and not result.get("errors")
+            and not (result.get("_astrolabe") or {}).get("partial")
+        )
+        verification = {
+            "ok": success,
             "operation_id": tool["name"],
             "proof": {
                 "attempted_at": datetime.now(UTC).isoformat(),
                 "adapter": tool.get("protocol") or tool.get("transport", "graphql"),
-                "schema_validated": result.get("error_code") != "SCHEMA_DRIFT",
-                "success": result.get("ok") is True,
+                "schema_validated": schema_validated,
+                "success": success,
+                "document_sha256": tool.get("apq_hash")
+                if tool.get("protocol") == Protocol.GRAPHQL_APQ.value
+                else None,
+                "persisted_identifier": tool.get("apq_hash"),
+                "compiler_source_sha256": (
+                    (tool.get("request_template") or {}).get("relay_evidence") or {}
+                ).get("source_sha256"),
+                "actively_executed": (
+                    (result.get("_astrolabe") or {}).get("http_status") or result.get("http_status")
+                )
+                is not None,
             },
             "result": result,
         }
+        # Keep durable proof separate from the captured contract. Never persist arguments,
+        # credentials, or returned data. A later capture cannot reuse proof for another hash.
+        proof_path = settings.toolpack_path.with_name("verification.jsonl")
+        record = {"operation_id": tool["name"], "proof": verification["proof"]}
+        flags = (
+            os.O_WRONLY
+            | os.O_APPEND
+            | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        try:
+            fd = os.open(proof_path, flags, 0o600)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+                    raise OSError("verification journal must be a private regular file")
+                payload = (json.dumps(record, sort_keys=True) + "\n").encode()
+                if os.write(fd, payload) != len(payload):
+                    raise OSError("incomplete verification journal write")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            verification["proof_recorded"] = True
+        except OSError:
+            # The upstream action already happened. Report journal failure without implying
+            # the query failed or inviting a retry of the upstream call.
+            verification["proof_recorded"] = False
+        return verification
 
     @server.tool(
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
