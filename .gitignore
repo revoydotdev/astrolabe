@@ -10,6 +10,7 @@ queries.map.json
 # run outputs (regenerated; may contain resource IDs)
 astrolabe-*/
 astrolabe-replay-*/
+chart-*/
 capture.jsonl
 openapi.json
 
