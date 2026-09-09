@@ -1066,3 +1066,29 @@ def test_cmd_replay_requires_auth_file(_replay_env):
                 str(_replay_env["cookies_path"]),
             ]
         )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--host", "remote.invalid"],
+        ["--local", "--no-auth"],
+        ["--local", "--cookies-file", "cookies.json"],
+        ["--local", "--recipe", "actions.json"],
+        ["--local", "--openapi"],
+    ],
+)
+def test_native_browser_import_rejects_unsafe_combinations_before_preflight(extra, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsafe native import reached preflight")
+
+    monkeypatch.setattr(cli, "preflight", forbidden)
+    args = cli.build_parser().parse_args(["map", "example.com", "--browser", "vivaldi", *extra])
+    with pytest.raises(cli.SafetyRefusalError):
+        cli.cmd_map(args)
+
+
+def test_native_decryption_and_recovery_are_not_parser_defaults():
+    args = cli.build_parser().parse_args(["map", "example.com"])
+    assert args.browser is None
+    assert args.recover_persisted is False

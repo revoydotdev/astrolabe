@@ -6,9 +6,8 @@ Pipeline (glue over reused engines):
   -> [clairvoyance schema] -> [har-to-openapi] -> analyze -> map.md + endpoints.json
 
 Capture, schema recovery and any live replay run on the pipeline HOST (residential
-egress, where cloakbrowser/Burp/byparr live). Authentication is bring-your-own: a
-pre-made Playwright-format cookie JSON export supplied via --cookies-file. This tool
-never reads or decrypts a browser's local cookie store.
+egress, where cloakbrowser/Burp/byparr live). Authentication comes from an exported
+cookie file or explicit domain-scoped Linux browser import via --browser.
 """
 
 from __future__ import annotations
@@ -293,6 +292,9 @@ CAPTURE_HELPERS = (
     "recipe_runtime.py",
     "recipe_worker.py",
     "graphql_doc.py",
+    "persisted.py",
+    "relay.py",
+    "payloads.py",
     "schema_recover.py",
 )
 # The per-site recipe is staged into the same directory as the helpers above, so its
@@ -305,6 +307,7 @@ CONTRACT_HELPERS = (
     "contract_verify.py",
     "browser.py",
     "security.py",
+    "payloads.py",
     "operation.py",
     "validation.py",
     "recipe.py",
@@ -614,6 +617,23 @@ def _probe_local_playwright(timeout: int = 30) -> tuple[bool, str]:
 def cmd_map(a):
     hp = _resolve(a)
     dom = normalize_host(a.domain)
+    if getattr(a, "browser", None) and (
+        not hp.local or a.no_auth or a.cookies_file or a.recipe or a.openapi
+    ):
+        raise SafetyRefusalError(
+            "native browser import requires local capture and cannot combine with "
+            "--no-auth, --cookies-file, recipes, or HAR/OpenAPI export"
+        )
+    if getattr(a, "browser", None):
+        # Bound an authenticated import even when general capture defaults are larger.
+        a.max_total_requests = min(a.max_total_requests, 100)
+        a.max_origin_requests = min(a.max_origin_requests, 100)
+        a.max_operation_requests = min(a.max_operation_requests, 20)
+        a.browser_concurrency = 1
+        a.no_burp = True  # No TLS interception of native credentials.
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     final_out = os.path.abspath(a.out or f"./astrolabe-{dom}")
     os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
     out = tempfile.mkdtemp(prefix=".astrolabe-stage-", dir=os.path.dirname(final_out) or ".")
@@ -642,24 +662,35 @@ def cmd_map(a):
     proxy = pf["burp_proxy"] if not a.no_burp else None
     byparr = pf["byparr"]
 
-    # 1. cookies (local) — bring your own: a pre-made Playwright-format cookie JSON
-    #    export. This tool never reads or decrypts a browser's cookie store.
-    cookies_local = os.path.join(out, "cookies.json")
-    _track_local_secret(cookies_local)
-    if not a.no_auth:
-        if not a.cookies_file:
-            raise ConfigurationError(
-                "--cookies-file is required for an authenticated map (or pass --no-auth)"
-            )
-        cks = json.load(open(os.path.expanduser(a.cookies_file)))
-        print(f"[cookies] {len(cks)} cookies from file")
-        atomic_write_json(cookies_local, cks, mode=0o600)
-
-    # 2. deploy to host tmpfs
+    # Native decryption goes straight to the private local tmpfs capture directory.
     run_id = _new_run_id()
     rdir = f"/dev/shm/astrolabe-{_target_slug(dom)}-{run_id}"
     _track_remote_tmpfs(hp, rdir)
     ssh_argv(hp, ["mkdir", "-m", "700", "-p", rdir], timeout=20)
+    cookies_local = (
+        f"{rdir}/cookies.json" if getattr(a, "browser", None) else os.path.join(out, "cookies.json")
+    )
+    _track_local_secret(cookies_local)
+    if not a.no_auth:
+        if not a.cookies_file and not getattr(a, "browser", None):
+            raise ConfigurationError(
+                "--cookies-file or --browser is required for an authenticated map (or pass --no-auth)"
+            )
+        from .credentials import browser_cookies
+
+        if getattr(a, "browser", None):
+            if a.cookies_file:
+                raise ConfigurationError("choose --browser or --cookies-file, not both")
+            from .browser_cookies import export_cookies
+
+            cks = export_cookies(a.browser, dom, a.profile)
+            print(f"[cookies] {len(cks)} domain-scoped cookies from {a.browser}")
+        else:
+            cks = browser_cookies(json.load(open(os.path.expanduser(a.cookies_file))))
+            print(f"[cookies] {len(cks)} cookies from file")
+        atomic_write_json(cookies_local, cks, mode=0o600)
+
+    # 2. deploy to host tmpfs
     for helper in CAPTURE_HELPERS:
         put(hp, os.path.join(HERE, helper), f"{rdir}/{helper}")
     recipe_argv: list[str] = []
@@ -682,12 +713,13 @@ def cmd_map(a):
             if getattr(a, "allow_inprocess_python_recipe", False):
                 recipe_argv += ["--allow-inprocess-python-recipe"]
     if not a.no_auth:
-        put(hp, cookies_local, f"{rdir}/cookies.json")
+        if not getattr(a, "browser", None):
+            put(hp, cookies_local, f"{rdir}/cookies.json")
         ssh_argv(hp, ["chmod", "600", f"{rdir}/cookies.json"], timeout=15)
 
     # 3. capture (cloakbrowser venv on remote/explicit-stealth; this CLI's own
     #    interpreter for the local playwright backend)
-    capture_py = hp.cloak_py if backend == "cloakbrowser" else sys.executable
+    capture_py = sys.executable if hp.local else hp.cloak_py
     cap = [
         capture_py,
         "capture.py",
@@ -698,7 +730,7 @@ def cmd_map(a):
         "--run-id",
         run_id,
         *recipe_argv,
-        "--har",
+        *([] if getattr(a, "browser", None) else ["--har"]),
         "--introspect",
     ]
     if not a.no_auth:
@@ -709,8 +741,12 @@ def cmd_map(a):
         cap += ["--byparr", byparr]
     if a.seeds:
         cap += ["--seeds", a.seeds]
+    if getattr(a, "recover_persisted", False):
+        cap.append("--recover-persisted")
     if a.crawl:
         cap += ["--crawl", str(a.crawl)]
+    if getattr(a, "block_assets", False):
+        cap.append("--block-assets")
     cap += [
         "--max-total-requests",
         str(getattr(a, "max_total_requests", 10_000)),
@@ -921,7 +957,7 @@ def cmd_replay(a):
     rdir = f"/dev/shm/astrolabe-replay-{_target_slug(dom)}-{_new_run_id()}"
     _track_remote_tmpfs(hp, rdir)
     ssh_argv(hp, ["mkdir", "-m", "700", "-p", rdir], timeout=20)
-    for f in ("replay.py", "security.py", "credentials.py"):
+    for f in ("replay.py", "security.py", "payloads.py", "credentials.py"):
         put(hp, os.path.join(HERE, f), f"{rdir}/{f}")
     put(hp, cookies_local, f"{rdir}/cookies.json")
     put(hp, os.path.expanduser(a.auth_file), f"{rdir}/auth.map.json")
@@ -1017,6 +1053,7 @@ def cmd_scan(a):
     put(hp, os.path.join(HERE, "scan.py"), f"{rdir}/scan.py")
     put(hp, os.path.join(HERE, "discovery.py"), f"{rdir}/discovery.py")
     put(hp, os.path.join(HERE, "security.py"), f"{rdir}/security.py")
+    put(hp, os.path.join(HERE, "payloads.py"), f"{rdir}/payloads.py")
     put(hp, os.path.join(HERE, "browser.py"), f"{rdir}/browser.py")
 
     cmd = [
@@ -1328,6 +1365,22 @@ def build_parser():
     )
     m.add_argument("--seeds", default="", help="comma-separated seed URLs")
     m.add_argument("--crawl", type=int, default=0)
+    m.add_argument(
+        "--block-assets",
+        action="store_true",
+        help="skip images/media/fonts to reserve bounded requests for APIs",
+    )
+    m.add_argument(
+        "--recover-persisted",
+        action="store_true",
+        help="recover exact APQ documents from browser Web Crypto hash inputs",
+    )
+    m.add_argument(
+        "--browser",
+        choices=("vivaldi", "chrome", "chromium", "brave", "edge"),
+        help="explicitly import this domain's cookies from a local Linux browser",
+    )
+    m.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
     m.add_argument("--max-total-requests", type=int, default=10_000)
     m.add_argument("--max-origin-requests", type=int, default=5_000)
     m.add_argument("--max-operation-requests", type=int, default=500)
