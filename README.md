@@ -113,6 +113,7 @@ live in `ASTROLABE_WORKSPACE`, defaulting to `$XDG_DATA_HOME/astrolabe`
 | `map_site` | capture a site and generate a read-only Chart |
 | `solve_challenge` | solve a Cloudflare-style challenge with Byparr into a private cookie file |
 | `verify_chart` | re-execute a Chart's reads in a warm browser to earn `verified-active` proof |
+| `import_har` | chart a HAR recorded elsewhere; proof is labelled `imported` |
 | `generate_chart` | regenerate a Chart (optionally with `read_pattern` for POST-based searches) |
 | `preflight`, `list_charts` | service readiness; Chart inventory |
 

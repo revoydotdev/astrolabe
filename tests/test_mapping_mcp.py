@@ -377,3 +377,28 @@ async def test_verify_chart_defaults_to_anonymous_and_regenerates(tmp_path, monk
     assert verify[verify.index("--seeds") + 1] == "https://example.com/a"
     assert generation[3] == "mcp-gen"
     assert result.data["verified_active"] == ["GET /api/a"]
+
+
+@pytest.mark.asyncio
+async def test_import_har_runs_the_real_pipeline_into_a_chart(tmp_path):
+    """No subprocess double: the MCP tool drives the real CLI on the HAR fixture."""
+    fixture = Path(__file__).parent / "fixtures" / "sample.har.json"
+    (tmp_path / "capture.har").write_text(fixture.read_text())
+    async with Client(create_server(tmp_path)) as client:
+        with pytest.raises(ToolError, match="inside the workspace"):
+            await client.call_tool("import_har", {"har_file": "../x.har", "domain": "example.com"})
+        result = await client.call_tool(
+            "import_har",
+            {
+                "har_file": "capture.har",
+                "domain": json.loads(fixture.read_text())["log"]["entries"][0]["request"][
+                    "url"
+                ].split("/")[2],
+            },
+        )
+    assert result.data["ok"] is True, result.data
+    chart = Path(result.data["capture_directory"])
+    contract = json.loads((chart / "contract.json").read_text())
+    sources = {op["proof"]["observed"].get("source") for op in contract["operations"].values()}
+    assert sources == {"har-import"}
+    assert (chart / "toolpack.json").is_file()

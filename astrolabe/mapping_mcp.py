@@ -456,6 +456,42 @@ def create_server(
                 result["toolpack"] = str(destination / "toolpack.json")
         return result
 
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=False))
+    @_refusals
+    async def import_har(
+        har_file: str,
+        domain: str,
+        include_mutations: bool = False,
+        read_pattern: str | None = None,
+    ) -> dict:
+        """Chart traffic recorded elsewhere (e.g. DevTools "Save all as HAR").
+
+        har_file must be inside the workspace. Only first-party API shapes are kept;
+        values never enter the Chart, and its proof is labelled imported, not observed.
+        """
+        host = normalize_host(domain)
+        source = (root / har_file).resolve()
+        if not source.is_relative_to(root) or not source.is_file():
+            raise ValueError("har_file must be an existing file inside the workspace")
+        destination = directory(f"chart-{host}-{uuid4().hex[:12]}")
+        generation = generation_arguments(destination, include_mutations, read_pattern)
+        result = await run(
+            ["import-har", str(source), "--domain", host, "--out", str(destination)],
+            300,
+            "import-har",
+        )
+        imported = result.pop("result", None) or {}
+        result["capture_directory"] = str(destination)
+        if result["ok"]:
+            result["entries_kept"] = imported.get("entries_kept")
+            result["entries_total"] = imported.get("entries_total")
+            result["chart"] = generated = await run(generation, 180, "mcp-gen")
+            generated.pop("result", None)
+            result["ok"] = generated["ok"]
+            if generated["ok"]:
+                result["toolpack"] = str(destination / "toolpack.json")
+        return result
+
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=True))
     @_refusals
     async def verify_chart(
