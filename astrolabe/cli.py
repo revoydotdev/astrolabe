@@ -656,16 +656,30 @@ def cmd_map(a):
             "native browser import requires local capture and cannot combine with "
             "--no-auth, --cookies-file, recipes, or HAR/OpenAPI export"
         )
-    if getattr(a, "browser", None):
+    attached = getattr(a, "cdp_endpoint", None)
+    if attached:
+        from .browser import validate_cdp_endpoint
+
+        validate_cdp_endpoint(attached)
+        if not hp.local or a.no_auth or a.cookies_file or a.browser or a.openapi:
+            raise SafetyRefusalError(
+                "--cdp-endpoint reuses a local browser's own session; it requires local "
+                "capture and cannot combine with --no-auth, --cookies-file, --browser, "
+                "or HAR/OpenAPI export"
+            )
+        if getattr(a, "browser_concurrency", 1) != 1:
+            raise ConfigurationError("an attached browser supports one capture shard")
+    if getattr(a, "browser", None) or attached:
         # Bound an authenticated import even when general capture defaults are larger.
         a.max_total_requests = min(a.max_total_requests, 100)
         a.max_origin_requests = min(a.max_origin_requests, 100)
         a.max_operation_requests = min(a.max_operation_requests, 20)
         a.browser_concurrency = 1
         a.no_burp = True  # No TLS interception of native credentials.
-        import resource
+        if getattr(a, "browser", None):
+            import resource
 
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     final_out = os.path.abspath(a.out or f"./astrolabe-{dom}")
     os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
     out = tempfile.mkdtemp(prefix=".astrolabe-stage-", dir=os.path.dirname(final_out) or ".")
@@ -703,7 +717,7 @@ def cmd_map(a):
         f"{rdir}/cookies.json" if getattr(a, "browser", None) else os.path.join(out, "cookies.json")
     )
     _track_local_secret(cookies_local)
-    if not a.no_auth:
+    if not a.no_auth and not attached:
         if not a.cookies_file and not getattr(a, "browser", None):
             raise ConfigurationError(
                 "--cookies-file or --browser is required for an authenticated map (or pass --no-auth)"
@@ -744,7 +758,7 @@ def cmd_map(a):
             recipe_argv += ["--trusted-recipe"]
             if getattr(a, "allow_inprocess_python_recipe", False):
                 recipe_argv += ["--allow-inprocess-python-recipe"]
-    if not a.no_auth:
+    if not a.no_auth and not attached:
         if not getattr(a, "browser", None):
             put(hp, cookies_local, f"{rdir}/cookies.json")
         ssh_argv(hp, ["chmod", "600", f"{rdir}/cookies.json"], timeout=15)
@@ -762,10 +776,12 @@ def cmd_map(a):
         "--run-id",
         run_id,
         *recipe_argv,
-        *([] if getattr(a, "browser", None) else ["--har"]),
+        *([] if getattr(a, "browser", None) or attached else ["--har"]),
         "--introspect",
     ]
-    if not a.no_auth:
+    if attached:
+        cap += ["--cdp-endpoint", attached]
+    elif not a.no_auth:
         cap += ["--cookies", f"{rdir}/cookies.json"]
     if proxy:
         cap += ["--proxy", proxy]
@@ -1189,8 +1205,12 @@ def cmd_contract(a):
             import resource
 
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        elif not a.cookies_file:
-            raise ConfigurationError("--cookies-file or --browser is required for --execute")
+        elif not a.cookies_file and not a.no_auth:
+            raise ConfigurationError(
+                "--cookies-file, --browser, or --no-auth is required for --execute"
+            )
+        if a.no_auth and (a.cookies_file or getattr(a, "browser", None)):
+            raise ConfigurationError("--no-auth cannot combine with --cookies-file or --browser")
         dom = normalize_host(
             a.domain or json.load(open(os.path.join(cap, "endpoints.json")))["base_domain"]
         )
@@ -1203,6 +1223,8 @@ def cmd_contract(a):
             cks = export_cookies(a.browser, dom, a.profile)
             print(f"[cookies] {len(cks)} domain-scoped cookies from {a.browser}")
             atomic_write_json(cookies_local, cks, mode=0o600)
+        elif a.no_auth:
+            pass
         else:
             atomic_write_json(
                 cookies_local,
@@ -1214,7 +1236,8 @@ def cmd_contract(a):
         ssh_argv(hp, ["mkdir", "-m", "700", "-p", rdir], timeout=20)
         for helper in CONTRACT_HELPERS:
             put(hp, os.path.join(HERE, helper), f"{rdir}/{helper}")
-        put(hp, cookies_local, f"{rdir}/cookies.json")
+        if not a.no_auth:
+            put(hp, cookies_local, f"{rdir}/cookies.json")
         validation_contract = os.path.join(cap, "_validation-contract.json")
         _register_cleanup(
             lambda: os.path.exists(validation_contract) and os.unlink(validation_contract)
@@ -1246,10 +1269,10 @@ def cmd_contract(a):
                 if getattr(a, "allow_inprocess_python_recipe", False):
                     rec.append("--allow-inprocess-python-recipe")
         cmd = [
-            hp.cloak_py,
+            # Same interpreter rule as map: the local backend runs in this CLI's venv.
+            sys.executable if hp.local else hp.cloak_py,
             "contract_verify.py",
-            "--cookies",
-            f"{rdir}/cookies.json",
+            *([] if a.no_auth else ["--cookies", f"{rdir}/cookies.json"]),
             "--outdir",
             rdir,
             "--base-domain",
@@ -1258,6 +1281,7 @@ def cmd_contract(a):
             "/graphql",
             "--contract",
             f"{rdir}/contract.json",
+            *(["--urls", a.seeds] if a.seeds else []),
             *rec,
         ]
         for operation_id in a.allow_mutation:
@@ -1441,6 +1465,11 @@ def build_parser():
         help="explicitly import this domain's cookies from a local Linux browser",
     )
     m.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
+    m.add_argument(
+        "--cdp-endpoint",
+        help="attach to a running local Chromium (http://127.0.0.1:PORT, started with "
+        "--remote-debugging-port) and capture with its existing session",
+    )
     m.add_argument(
         "--contract-store",
         help="directory holding the per-domain contract of record "
@@ -1627,6 +1656,7 @@ def build_parser():
         "--domain", help="target domain for --execute (default: capture's base_domain)"
     )
     ct_p.add_argument("--recipe", help="recipe to warm surfaces for --execute")
+    ct_p.add_argument("--seeds", default="", help="comma-separated warm-up URLs for --execute")
     ct_p.add_argument(
         "--trusted-recipe",
         action="store_true",
@@ -1668,6 +1698,9 @@ def build_parser():
         help="explicitly import this domain's cookies from a local Linux browser (with --execute)",
     )
     ct_p.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
+    ct_p.add_argument(
+        "--no-auth", action="store_true", help="verify a public site anonymously (with --execute)"
+    )
     ct_p.add_argument("--timeout", type=int, default=400)
     ct_p.set_defaults(func=cmd_contract)
 

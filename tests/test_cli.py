@@ -1234,3 +1234,56 @@ def test_contract_browser_happy_path_stages_cookies_like_cookies_file(
     out = capsys.readouterr().out
     assert env["secret_value"] not in out
     assert "[cookies] 1 domain-scoped cookies from vivaldi" in out
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--local", "--no-auth"],
+        ["--local", "--cookies-file", "cookies.json"],
+        ["--local", "--browser", "chrome"],
+        ["--local", "--openapi"],
+        ["--local", "--browser-concurrency", "2"],
+        ["--host", "remote-capture"],
+    ],
+)
+def test_attached_browser_rejects_unsafe_combinations_before_preflight(extra, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsafe attached capture reached preflight")
+
+    monkeypatch.setattr(cli, "preflight", forbidden)
+    monkeypatch.setattr(
+        cli, "_resolve", lambda a: types.SimpleNamespace(local="--local" in extra, host="h")
+    )
+    args = cli.build_parser().parse_args(
+        ["map", "example.com", "--cdp-endpoint", "http://127.0.0.1:9222", *extra]
+    )
+    with pytest.raises((cli.SafetyRefusalError, cli.ConfigurationError)):
+        cli.cmd_map(args)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://10.0.0.5:9222",
+        "https://127.0.0.1:9222",
+        "http://127.0.0.1",
+        "ws://user:pw@localhost:1",
+    ],
+)
+def test_attached_browser_accepts_only_loopback_devtools_endpoints(endpoint, monkeypatch):
+    monkeypatch.setattr(cli, "preflight", lambda *a, **k: pytest.fail("reached preflight"))
+    args = cli.build_parser().parse_args(
+        ["map", "example.com", "--local", "--cdp-endpoint", endpoint]
+    )
+    with pytest.raises(ValueError):
+        cli.cmd_map(args)
+
+
+def test_contract_execute_no_auth_cannot_combine_with_credentials(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "preflight", lambda *a, **k: pytest.fail("reached preflight"))
+    args = cli.build_parser().parse_args(
+        ["contract", str(tmp_path), "--execute", "--local", "--no-auth", "--cookies-file", "c.json"]
+    )
+    with pytest.raises(cli.ConfigurationError):
+        cli.cmd_contract(args)
