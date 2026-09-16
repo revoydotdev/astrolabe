@@ -209,8 +209,9 @@ def path_tmpl(url):
 # `/user/settings` observed once each (D=2, N=2) is thin evidence (N <
 # MIN_SAMPLES) and falls back to the lexical guess per segment instead, but
 # the same fork observed 3-4 times apiece could cross PARAM_UNIQUE_RATIO. This
-# is an accepted tradeoff of cardinality-only clustering (no semantic
-# awareness of "is this a resource name or a value"), not fixed here.
+# was an accepted tradeoff of cardinality-only clustering; response-shape
+# evidence (see _distinct_endpoints below) now vetoes the merge whenever the
+# siblings' observed responses differ.
 
 MIN_SAMPLES = 4  # fewer total requests through a trie position than
 # this is thin evidence; fall back to the lexical
@@ -239,11 +240,51 @@ def _param_name_for_values(values):
 
 
 class _TrieNode:
-    __slots__ = ("children", "counts")
+    __slots__ = ("children", "counts", "shapes")
 
     def __init__(self):
         self.children: dict[str, _TrieNode] = {}
         self.counts: dict[str, int] = {}  # next-segment value -> occurrence count
+        self.shapes: dict[str, set[str]] = {}  # next-segment value -> response key paths
+
+
+# Cardinality alone cannot tell `/api/public/{id}` from a handful of RPC-style
+# siblings (`/api/public/search`, `/api/public/getVersion`, `/api/public/terms`)
+# that each saw light traffic. Responses can: members of one id space return the
+# same resource shape, while distinct endpoints return different ones. Two values
+# at a candidate position are treated as different endpoints when their response
+# key paths overlap weakly, or when each carries several paths the other lacks
+# (which survives a shared response envelope around different payloads).
+SHAPE_OVERLAP_FLOOR = 0.5
+SHAPE_DISTINCT_PATHS = 3
+
+
+def _shape_paths(shape, prefix="", depth=0):
+    paths: set[str] = set()
+    if depth > 8:
+        return paths
+    if isinstance(shape, dict):
+        for key, value in shape.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            paths.add(path)
+            paths |= _shape_paths(value, path, depth + 1)
+    elif isinstance(shape, list):
+        for item in shape:
+            paths |= _shape_paths(item, f"{prefix}[]", depth + 1)
+    return paths
+
+
+def _distinct_endpoints(shapes_by_value):
+    shaped = [paths for paths in shapes_by_value.values() if paths]
+    for index, left in enumerate(shaped):
+        for right in shaped[index + 1 :]:
+            overlap = len(left & right) / len(left | right)
+            if overlap < SHAPE_OVERLAP_FLOOR or (
+                len(left - right) >= SHAPE_DISTINCT_PATHS
+                and len(right - left) >= SHAPE_DISTINCT_PATHS
+            ):
+                return True
+    return False
 
 
 class PathTemplater:
@@ -254,13 +295,17 @@ class PathTemplater:
     path_tmpl()'s single-URL pure function.
     """
 
-    def __init__(self, urls):
+    def __init__(self, urls, shapes=None):
+        """`shapes`, when given, aligns with `urls`: each record's resp_shape or None."""
         self._root = _TrieNode()
-        for u in urls:
+        for index, u in enumerate(urls):
             segs = up.urlparse(u).path.split("/")
+            paths = _shape_paths(shapes[index]) if shapes and shapes[index] else set()
             node = self._root
             for s in segs:
                 node.counts[s] = node.counts.get(s, 0) + 1
+                if paths:
+                    node.shapes.setdefault(s, set()).update(paths)
                 node = node.children.setdefault(s, _TrieNode())
 
     def apply(self, url):
@@ -273,7 +318,13 @@ class PathTemplater:
             counts = node.counts if node is not None else {}
             n = sum(counts.values())
             d = len(counts)
-            if d >= 2 and n >= MIN_SAMPLES and (d / n) >= PARAM_UNIQUE_RATIO:
+            shapes = node.shapes if node is not None else {}
+            if (
+                d >= 2
+                and n >= MIN_SAMPLES
+                and (d / n) >= PARAM_UNIQUE_RATIO
+                and not _distinct_endpoints(shapes)
+            ):
                 out.append("{" + _param_name_for_values(counts.keys()) + "}")
             else:
                 out.append(baseline[i] if i < len(baseline) else s)
@@ -384,12 +435,14 @@ def build(recs, meta):
             MediaKind.JAVASCRIPT.value,
         }
 
-    rest_urls = [
-        r["url"]
+    rest_records = [
+        r
         for r in recs
         if "graphql" not in r and up.urlparse(r["url"]).path not in gql_paths and eligible_rest(r)
     ]
-    templater = PathTemplater(rest_urls)
+    templater = PathTemplater(
+        [r["url"] for r in rest_records], [r.get("resp_shape") for r in rest_records]
+    )
 
     rest = collections.OrderedDict()
     for r in recs:

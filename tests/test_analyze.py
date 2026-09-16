@@ -487,3 +487,33 @@ def test_render_emits_fused_discovery_artifact_and_calibrated_coverage(tmp_path)
     assert discovery["coverage"]["recipe_action_coverage"]["ratio"] == 1.0
     manifest = json.loads((tmp_path / "artifact-manifest.json").read_text())
     assert "discovery.json" in manifest["artifacts"]
+
+
+def test_rpc_style_siblings_with_different_responses_stay_literal():
+    """Light traffic to several RPC-style endpoints under one prefix crosses the
+    uniqueness ratio, but their responses differ, so they are not one {slug}."""
+    envelope = {"status": "str", "closed": "bool", "buffered": "bool"}
+    records = [
+        ("/api/public/getVersion", {**envelope, "payload": {"version": "str"}}),
+        ("/api/public/getVersion", {**envelope, "payload": {"version": "str"}}),
+        (
+            "/api/public/search",
+            {**envelope, "payload": {"noOfRecords": "int", "searchResults": [{"name": "str"}]}},
+        ),
+        (
+            "/api/public/getCaseDetails",
+            {**envelope, "payload": {"caseCharge": {"offenseDate": "str"}, "hearings": ["str"]}},
+        ),
+        ("/api/public/termsAccepted", {"status": "str"}),
+    ]
+    t = analyze.PathTemplater(_urls(*[p for p, _ in records]), [s for _, s in records])
+    for path, _shape in records:
+        assert t.apply(f"https://example.com{path}") == path
+
+
+def test_id_space_with_matching_responses_is_still_parameterized():
+    shape = {"id": "int", "name": "str", "email": "str"}
+    shapes = [shape, {**shape, "bio": "str"}, shape, shape, shape]
+    urls = _urls("/api/user/42", "/api/user/43", "/api/user/44", "/api/user/7", "/api/user/91")
+    t = analyze.PathTemplater(urls, shapes)
+    assert t.apply(urls[1]) == "/api/user/{id}"
