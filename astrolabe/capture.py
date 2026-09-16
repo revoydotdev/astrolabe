@@ -32,7 +32,7 @@ try:
     from astrolabe.relay import RelayCatalog, MAX_SCRIPT_BYTES, MAX_SCRIPTS
     from astrolabe.client_credentials import MAX_SITES_PER_CAPTURE as MAX_CREDENTIAL_SITES
     from astrolabe.client_credentials import discover as discover_client_credentials
-    from astrolabe.payloads import decode_payload
+    from astrolabe.payloads import PackagingError, decode_payload
     from astrolabe.security import (
         atomic_write_json,
         atomic_write_text,
@@ -59,7 +59,7 @@ except ImportError:  # standalone deployment on the capture host
         MAX_SITES_PER_CAPTURE as MAX_CREDENTIAL_SITES,
         discover as discover_client_credentials,
     )
-    from payloads import decode_payload  # type: ignore[import-not-found,no-redef]
+    from payloads import PackagingError, decode_payload  # type: ignore[import-not-found,no-redef]
     from security import (  # type: ignore[import-not-found,no-redef]
         atomic_write_json,
         atomic_write_text,
@@ -248,7 +248,14 @@ def response_payload(response, max_bytes, *, graphql=False):
     raw = response.body()
     if not raw.strip():
         return None
-    return decode_payload(raw, media_type=media_type, max_bytes=max_bytes)
+    try:
+        return decode_payload(raw, media_type=media_type, max_bytes=max_bytes)
+    except PackagingError:
+        # Plain text (properties files, CSV, prose) is a legitimate non-API body, not a
+        # decode failure. Text that claims to be GraphQL or a structured type still fails.
+        if not graphql and kind.startswith("text/") and kind != "text/json":
+            return None
+        raise
 
 
 def admit_request(

@@ -622,3 +622,34 @@ def test_graphql_json_in_javascript_media_type_is_decoded(capture):
     assert capture.response_payload(Response(), 10000) is None
     decoded = capture.response_payload(Response(), 10000, graphql=True)
     assert decoded.value == {"data": {"viewer": {"id": "private"}}}
+
+
+def test_plain_text_body_is_not_a_decode_failure(capture):
+    class Properties:
+        headers = {"content-type": "text/plain;charset=UTF-8"}
+
+        def body(self):
+            return b"court.url.1=https://example.com/a\ncourt.url.2=https://example.com/b\n"
+
+    assert capture.response_payload(Properties(), 1024) is None
+
+
+def test_plain_text_json_is_still_decoded(capture):
+    class TextJson:
+        headers = {"content-type": "text/plain"}
+
+        def body(self):
+            return b'{"ok": true}'
+
+    assert capture.response_payload(TextJson(), 1024).value == {"ok": True}
+
+
+def test_structured_media_type_that_fails_to_decode_still_raises(capture):
+    class Broken:
+        headers = {"content-type": "application/json"}
+
+        def body(self):
+            return b"not json at all ~~"
+
+    with pytest.raises(ValueError):
+        capture.response_payload(Broken(), 1024)
