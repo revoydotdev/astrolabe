@@ -247,15 +247,18 @@ def response_payload(response, max_bytes, *, graphql=False):
         not graphql and kind in {"application/javascript", "text/javascript"}
     ):
         return None
+    request = getattr(response, "request", None)
+    if str(getattr(request, "method", "")).upper() == "HEAD":
+        return None  # HEAD responses carry no body to decode.
     raw = response.body()
     if not raw.strip():
         return None
     try:
         return decode_payload(raw, media_type=media_type, max_bytes=max_bytes)
     except PackagingError:
-        # Plain text (properties files, CSV, prose) is a legitimate non-API body, not a
-        # decode failure. Text that claims to be GraphQL or a structured type still fails.
-        if not graphql and kind.startswith("text/") and kind != "text/json":
+        # Plain or unlabeled text (properties files, CSV, prose) is a legitimate non-API
+        # body, not a decode failure. A body labeled GraphQL or structured still fails.
+        if not graphql and (not kind or kind.startswith("text/")) and kind != "text/json":
             return None
         raise
 

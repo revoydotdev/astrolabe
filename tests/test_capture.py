@@ -725,3 +725,21 @@ def test_byparr_failure_status_raises(capture, monkeypatch):
     monkeypatch.setattr(capture.urllib.request, "urlopen", lambda *a, **k: Response())
     with pytest.raises(RuntimeError, match="Challenge not solved"):
         capture.byparr_solve("http://127.0.0.1:1/v1", "https://example.com/")
+
+
+def test_unlabeled_text_and_head_responses_are_not_decode_failures(capture):
+    class Unlabeled:
+        headers = {}
+
+        def body(self):
+            return b"court.url.1=https://example.com/a\n"
+
+    class Head:
+        headers = {"content-type": "application/json"}
+        request = type("Request", (), {"method": "HEAD"})()
+
+        def body(self):
+            pytest.fail("a HEAD response body was read")
+
+    assert capture.response_payload(Unlabeled(), 1024) is None
+    assert capture.response_payload(Head(), 1024) is None
