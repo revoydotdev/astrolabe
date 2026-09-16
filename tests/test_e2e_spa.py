@@ -256,3 +256,77 @@ def test_attached_browser_captures_without_touching_operator_tabs(tmp_path, site
         browser.terminate()
         browser.wait(timeout=15)
         shutil.rmtree(profile, ignore_errors=True)
+
+
+VERIFY_CHILD = """
+import sys
+import astrolabe.security as security
+security.resolve_public_addresses = lambda *args, **kwargs: None
+import astrolabe.contract_verify as verify
+rules = sys.argv.pop(1)
+launch = verify.launch_context
+verify.launch_context = lambda **kw: launch(**kw, args=[rules])
+verify.main()
+"""
+
+
+def test_anonymous_verification_re_executes_captured_rest_reads(tmp_path, site):
+    out, _records, _meta = _run_capture(tmp_path, site, [])
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    for module in ("astrolabe.analyze", "astrolabe.contract"):
+        subprocess.run(
+            [sys.executable, "-m", module, str(out)], cwd=ROOT, env=env, check=True, timeout=120
+        )
+    contract = json.loads((out / "contract.json").read_text())
+    assert contract["operations"]["POST /api/public/search"]["type"] == "mutation"
+    recipe = tmp_path / "recipe.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            VERIFY_CHILD,
+            f"--host-resolver-rules=MAP {HOST} 127.0.0.1:{site}",
+            "--base-domain",
+            HOST,
+            "--outdir",
+            str(out),
+            "--contract",
+            str(out / "contract.json"),
+            "--urls",
+            f"http://{HOST}/about,http://{HOST}/",
+            "--recipe",
+            str(recipe),
+            "--warm-ms",
+            "1500",
+            "--delay",
+            "0",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+    verify = json.loads((out / "verify.json").read_text())
+    assert verify["GET /api/public/version"]["status"] == 200
+    assert verify["GET /api/public/version"]["schema_validated"] is True
+    assert verify["GET /api/public/termsAccepted"]["actively_executed"] is True
+    # A POST the contract classifies as a write is never replayed.
+    assert "POST /api/public/search" not in verify
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "astrolabe.contract",
+            str(out),
+            "--active",
+            str(out / "verify.json"),
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        timeout=120,
+    )
+    proven = json.loads((out / "contract.json").read_text())["operations"]
+    assert proven["GET /api/public/version"]["status"] == "verified-active"
