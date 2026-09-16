@@ -104,11 +104,55 @@ fast with an install hint rather than silently falling back.
 ## Usage
 
 The native mapping MCP entry point is `astrolabe-mapping-mcp` (or
-`python -m astrolabe.mapping_mcp`). Set `ASTROLABE_WORKSPACE` to the local
-capture workspace. Its `map_site` accepts a private exported `cookies_file`,
-optional seed URLs, and enables exact persisted-query recovery by default.
-It uses this installation's browser/Byparr pipeline and generates a read-only
-Chart. Serve that Chart with `astrolabe-mcp`.
+`python -m astrolabe.mapping_mcp`). Charts, run logs, and staged credentials
+live in `ASTROLABE_WORKSPACE`, defaulting to `$XDG_DATA_HOME/astrolabe`
+(`~/.local/share/astrolabe`). Serve a generated Chart with `astrolabe-mcp`.
+
+| tool | what it does |
+|---|---|
+| `map_site` | capture a site and generate a read-only Chart |
+| `solve_challenge` | solve a Cloudflare-style challenge with Byparr into a private cookie file |
+| `verify_chart` | re-execute a Chart's reads in a warm browser to earn `verified-active` proof |
+| `generate_chart` | regenerate a Chart (optionally with `read_pattern` for POST-based searches) |
+| `preflight`, `list_charts` | service readiness; Chart inventory |
+
+Many APIs only fire after someone types, submits, dismisses a modal, or pages
+through results. Pass those steps as `actions`; each runs on the last seed page
+and waits for the API traffic it caused to settle before the next:
+
+```json
+{"domain": "example.com", "seeds": ["https://example.com/search"],
+ "actions": [
+   {"action": "search", "selector": "role=textbox[name=\"Name\"]", "value": "smith",
+    "submit": true, "safe_annotation": "read-only name search"},
+   {"action": "click", "selector": "role=button[name=\"Acknowledge\"]", "optional": true,
+    "safe_annotation": "dismiss disclaimer"},
+   {"action": "wait_for", "selector": ".result"},
+   {"action": "click", "selector": "text=Load More", "safe_annotation": "next page"}],
+ "read_pattern": "/api/search$"}
+```
+
+Actions are `search`, `click`, `press` (Enter/Tab/Escape/arrows/Space),
+`select`, `wait_for`, `wait`, and `scroll`. State-changing steps require a
+`safe_annotation`; selector steps accept `optional` and `timeout_ms` (≤15s).
+
+Session sources are mutually exclusive: a workspace `cookies_file` (for
+example from `solve_challenge`, together with its `user_agent`, because
+clearance is bound to the agent that solved it), a decrypted local `browser`
+profile, or a running browser via `cdp_endpoint`. Omit all three for anonymous
+capture. Validation refusals and CLI failures come back with their reason and
+the path of the run's private log.
+
+### Attaching to a running browser
+
+`astrolabe map --cdp-endpoint http://127.0.0.1:9222` (or `map_site(...,
+cdp_endpoint=...)`) captures inside a Chromium you already have open, started
+with `--remote-debugging-port=9222`, reusing its logins and challenge
+clearance. astrolabe opens its own tab, scopes routing, budgets, and listeners
+to that tab, and on exit closes only that tab and disconnects. Only loopback
+endpoints are accepted, and the MCP server additionally requires the operator
+to list the exact endpoint in `ASTROLABE_CDP_ENDPOINTS`. Attached capture
+cannot combine with cookie files, native browser import, proxies, or HAR export.
 
 See [persisted-query recovery and payload decoding](docs/persisted-recovery.md)
 for supported packaging, evidence requirements, and limitations.
@@ -132,11 +176,17 @@ astrolabe map example.com \
     [--openapi]    # first-party REST OpenAPI (host-side; HAR never leaves the host)
     [--no-auth]    # anonymous target (skip cookies entirely)
     [--seeds URL,URL] [--crawl N] [--out DIR]
+    [--cdp-endpoint http://127.0.0.1:9222]  # capture inside a running browser session
+    [--user-agent UA]                       # pair with `challenge` cookies
     # -> contract.md (contract of record) + map.md + endpoints.json
+
+astrolabe challenge https://example.com/ --domain example.com \
+    --out cookies.json --local            # Byparr solve -> 0600 cookie file + solving agent
 
 astrolabe contract <capture-dir> \        # versioned typed inventory + observation/proof history
     [--merge prior/contract.json]           # union across runs (completeness) + drift
     [--execute --cookies-file cookies.json --domain example.com]  # actively re-verify
+    [--execute --no-auth --seeds URL,URL [--recipe actions.json]]  # anonymous public site
     # -> contract.json (contract of record) + contract.md (coverage scorecard)
 
 astrolabe mcp-gen <capture-dir> \         # generate a typed MCP toolpack from a capture
