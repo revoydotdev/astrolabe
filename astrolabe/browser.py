@@ -129,3 +129,86 @@ class _PlaywrightContextProxy:
                 browser.close()
             finally:
                 pw.stop()
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def validate_cdp_endpoint(endpoint: str) -> str:
+    """Accept only a loopback DevTools endpoint.
+
+    Attaching grants full control of that browser and every session in it, so a
+    remote or LAN endpoint is never a legitimate capture target.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(endpoint)
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("malformed CDP endpoint") from exc
+    if parts.scheme not in {"http", "ws"} or (parts.hostname or "") not in _LOOPBACK_HOSTS:
+        raise ValueError("CDP endpoint must be an http:// or ws:// loopback address")
+    if port is None or parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError("CDP endpoint must be host:port with no credentials or query")
+    return endpoint
+
+
+def connect_context(endpoint: str):
+    """Attach to an already-running Chromium over CDP and use its default context.
+
+    The operator's existing session (cookies, logins, challenge clearance) is reused
+    as-is. close() closes only the pages astrolabe opened and then disconnects; the
+    browser and the operator's own tabs keep running.
+    """
+    from playwright.sync_api import sync_playwright
+
+    validate_cdp_endpoint(endpoint)
+    pw = sync_playwright().start()
+    try:
+        browser = pw.chromium.connect_over_cdp(endpoint)
+    except Exception:
+        pw.stop()
+        raise
+    if not browser.contexts:
+        browser.close()
+        pw.stop()
+        raise RuntimeError("attached browser exposes no default context")
+    return _AttachedContextProxy(pw, browser, browser.contexts[0])
+
+
+class _AttachedContextProxy:
+    """Forwards to the attached browser's default context, tracking owned pages."""
+
+    attached = True
+
+    def __init__(self, pw, browser, ctx):
+        object.__setattr__(self, "_pw", pw)
+        object.__setattr__(self, "_browser", browser)
+        object.__setattr__(self, "_ctx", ctx)
+        object.__setattr__(self, "_pages", [])
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_ctx"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_ctx"), name, value)
+
+    def new_page(self):
+        page = object.__getattribute__(self, "_ctx").new_page()
+        object.__getattribute__(self, "_pages").append(page)
+        return page
+
+    def close(self, *_args, **_kwargs):
+        try:
+            for page in object.__getattribute__(self, "_pages"):
+                try:
+                    page.close()
+                except Exception:
+                    pass  # A page the operator already closed needs no cleanup.
+        finally:
+            try:
+                # For a CDP connection this disconnects; it does not close the browser.
+                object.__getattribute__(self, "_browser").close()
+            finally:
+                object.__getattribute__(self, "_pw").stop()

@@ -19,7 +19,7 @@ import argparse, atexit, hashlib, json, os, re, signal, sys, time, importlib.uti
 from datetime import UTC, datetime
 
 try:
-    from astrolabe.browser import launch_context
+    from astrolabe.browser import connect_context, launch_context
     from astrolabe.graphql_doc import parse_graphql_document
     from astrolabe.media import classify_media
     from astrolabe.operation import graphql_protocol
@@ -44,7 +44,7 @@ try:
         validate_url,
     )
 except ImportError:  # standalone deployment on the capture host
-    from browser import launch_context  # type: ignore[import-not-found,no-redef]
+    from browser import connect_context, launch_context  # type: ignore[import-not-found,no-redef]
     from graphql_doc import parse_graphql_document  # type: ignore[import-not-found,no-redef]
     from media import classify_media  # type: ignore[import-not-found,no-redef]
     from operation import graphql_protocol  # type: ignore[import-not-found,no-redef]
@@ -654,6 +654,12 @@ def main():
     ap.add_argument("--base-domain", required=True)
     ap.add_argument("--proxy", default=None)
     ap.add_argument("--byparr", default=None, help="byparr /v1 endpoint for CF fallback")
+    ap.add_argument(
+        "--cdp-endpoint",
+        default=None,
+        help="attach to a running loopback Chromium (http://127.0.0.1:PORT) and reuse "
+        "its session instead of launching a browser",
+    )
     ap.add_argument("--outdir", default=".")
     ap.add_argument("--run-id", help="caller-generated identity used to reject stale transfers")
     ap.add_argument("--har", action="store_true")
@@ -700,6 +706,11 @@ def main():
         "sleep(wait) behavior (debugging escape hatch)",
     )
     a = ap.parse_args()
+    if a.cdp_endpoint and (a.cookies or a.proxy or a.har):
+        raise SystemExit(
+            "--cdp-endpoint reuses the attached browser's own session; it cannot combine "
+            "with --cookies, --proxy, or --har"
+        )
     for option, value in (
         ("--max-total-requests", a.max_total_requests),
         ("--max-origin-requests", a.max_origin_requests),
@@ -831,11 +842,20 @@ def main():
     relay_catalog = RelayCatalog()
     credential_sites: list[dict] = []
 
-    kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
-    ctx = launch_context(**kw)
+    if a.cdp_endpoint:
+        # Attached mode shares the operator's browser. Everything astrolabe installs
+        # (routing, listeners, init scripts) is scoped to its own page so the
+        # operator's other tabs are neither budgeted, blocked, nor recorded.
+        ctx = connect_context(a.cdp_endpoint)
+        page = ctx.new_page()
+        traffic = page
+    else:
+        kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
+        ctx = launch_context(**kw)
+        traffic = ctx
     if a.recover_persisted:
-        ctx.add_init_script(RECOVERY_INIT_SCRIPT)
-    ctx.set_default_navigation_timeout(45000)
+        traffic.add_init_script(RECOVERY_INIT_SCRIPT)
+    traffic.set_default_navigation_timeout(45000)
 
     def enforce_request_budget(route):
         request = route.request
@@ -879,7 +899,7 @@ def main():
             return
         route.continue_()
 
-    ctx.route("**/*", enforce_request_budget)
+    traffic.route("**/*", enforce_request_budget)
     try:
         ctx.on(
             "serviceworker",
@@ -1231,8 +1251,9 @@ def main():
                 partial=True,
             )
 
-    ctx.on("response", on_response)
-    page = ctx.new_page()
+    traffic.on("response", on_response)
+    if not a.cdp_endpoint:
+        page = ctx.new_page()
     last_auth = {}  # keep live auth header VALUES in memory for introspection (never persisted)
 
     def track_auth(req):
@@ -1399,7 +1420,7 @@ def main():
             url = validate_url(url, {base}, schemes=("https", "http"), resolve=True)
             page.goto(url, wait_until="domcontentloaded")
             _settle("visit")
-            if cf_blocked() and a.byparr:
+            if cf_blocked() and a.byparr and not a.cdp_endpoint:
                 log(f"[cf] challenge on {url} -> byparr")
                 events["cf"].append(url)
                 try:
@@ -1556,7 +1577,7 @@ def main():
         run_state["completed_at"] = datetime.now(UTC).isoformat()
         record_failure("capture", "cancellation", RuntimeError(f"signal {signum}"), partial=True)
         try:
-            ctx.remove_listener("response", on_response)
+            traffic.remove_listener("response", on_response)
         except Exception:
             pass  # A closing browser must not prevent partial-artifact flushing.
         flush_meta()
@@ -1586,19 +1607,6 @@ def main():
                 )
             except Exception as e:
                 record_failure("crawl", "browser", e, context=safe_url(u))
-
-    # optional shallow same-origin crawl
-    if a.crawl and crawl_candidates:
-        seen = set(surfaces)
-        crawled = 0
-        for h in crawl_candidates:
-            if crawled >= a.crawl:
-                break
-            h = h.split("#", 1)[0]
-            if _first_party(h) and h not in seen and up.urlparse(h).path not in ("", "/"):
-                seen.add(h)
-                crawled += 1
-                visit(h, 3.0)
 
     # recipe custom driving (search filters, pagers, settings nav)
     if recipe and hasattr(recipe, "drive"):
@@ -1667,6 +1675,20 @@ def main():
             strict_recipe_egress[0] = False
             finish_action()
             stats["interaction_id"] = None
+
+    # optional shallow same-origin crawl — after drive(), so recipe actions start on
+    # the seed page instead of whichever link the crawl happened to visit last
+    if a.crawl and crawl_candidates:
+        seen = set(surfaces)
+        crawled = 0
+        for h in crawl_candidates:
+            if crawled >= a.crawl:
+                break
+            h = h.split("#", 1)[0]
+            if _first_party(h) and h not in seen and up.urlparse(h).path not in ("", "/"):
+                seen.add(h)
+                crawled += 1
+                visit(h, 3.0)
 
     # ---- active probing: fire recipe-declared endpoints through the page's own
     #      fetch() context, using session headers harvested from the SPA's XHRs.
@@ -1871,7 +1893,7 @@ def main():
         record_failure("offline-queue", "browser", exc)
     run_state["completed_at"] = datetime.now(UTC).isoformat()
     try:
-        ctx.remove_listener("response", on_response)
+        traffic.remove_listener("response", on_response)
     except Exception:
         pass
     flush_meta()
