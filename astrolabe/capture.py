@@ -1574,23 +1574,31 @@ def main():
     signal.signal(signal.SIGINT, _on_term)
     atexit.register(flush_meta)
 
+    # Links are harvested from every surface, not only whichever page happened to be
+    # current after the last seed, so each seed contributes crawl candidates.
+    crawl_candidates: list[str] = []
     for u in surfaces:
-        visit(u, 4.0)
+        landed = visit(u, 4.0)
+        if a.crawl and landed:
+            try:
+                crawl_candidates += page.eval_on_selector_all(
+                    "a[href]", "els => els.map(e => e.href)"
+                )
+            except Exception as e:
+                record_failure("crawl", "browser", e, context=safe_url(u))
 
     # optional shallow same-origin crawl
-    if a.crawl and surfaces:
-        try:
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            seen = set(surfaces)
-            for h in hrefs:
-                if len([s for s in seen]) >= len(surfaces) + a.crawl:
-                    break
-                if _first_party(h) and h not in seen and up.urlparse(h).path not in ("", "/"):
-                    seen.add(h)
-                    visit(h, 3.0)
-        except Exception as e:
-            record_failure("crawl", "browser", e, partial=True)
-            log(f"[crawl-ERR] {safe_text(e)}")
+    if a.crawl and crawl_candidates:
+        seen = set(surfaces)
+        crawled = 0
+        for h in crawl_candidates:
+            if crawled >= a.crawl:
+                break
+            h = h.split("#", 1)[0]
+            if _first_party(h) and h not in seen and up.urlparse(h).path not in ("", "/"):
+                seen.add(h)
+                crawled += 1
+                visit(h, 3.0)
 
     # recipe custom driving (search filters, pagers, settings nav)
     if recipe and hasattr(recipe, "drive"):
