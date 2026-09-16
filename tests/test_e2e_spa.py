@@ -45,6 +45,7 @@ pytestmark = pytest.mark.skipif(BINARY is None, reason="no local Chromium for e2
 
 class Handler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str]] = []
+    header_names: list[set[str]] = []
 
     def log_message(self, *_args):
         pass
@@ -61,6 +62,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         type(self).requests.append(("GET", self.path))
+        type(self).header_names.append({name.lower() for name in self.headers})
         if self.path in {"/", "/about"}:
             page = "index.html" if self.path == "/" else "about.html"
             self._send(200, (FIXTURES / page).read_text(), "text/html")
@@ -107,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
 @pytest.fixture
 def site():
     Handler.requests = []
+    Handler.header_names = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -133,6 +136,7 @@ RECIPE = {
         {"action": "wait_for", "selector": ".result"},
         {"action": "click", "selector": "#more", "safe_annotation": "load next page"},
     ],
+    "active_probes": [{"url": f"http://{HOST}/api/public/version", "method": "GET"}],
 }
 
 # Child-process entry point: disable only the public-DNS check (the fixture host is
@@ -210,6 +214,9 @@ def _assert_interaction_gated_flow_captured(out, records, meta):
 def test_launched_browser_captures_interaction_gated_api(tmp_path, site):
     out, records, meta = _run_capture(tmp_path, site, [])
     _assert_interaction_gated_flow_captured(out, records, meta)
+    assert any(record.get("_active_probe") for record in records)
+    synthetic = {"x-referer", "x-page-unique-id", "x-api-correlation-id"}
+    assert all(not (names & synthetic) for names in Handler.header_names)
 
 
 def _free_port() -> int:
