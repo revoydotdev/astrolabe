@@ -163,8 +163,8 @@ def test_declarative_drive_reports_each_causal_action(tmp_path):
         (),
         {
             "evaluate": lambda *args: None,
-            "fill": lambda *args: None,
-            "press": lambda *args: None,
+            "fill": lambda *args, **kwargs: None,
+            "press": lambda *args, **kwargs: None,
         },
     )()
     interactions = []
@@ -443,16 +443,16 @@ def test_declarative_drive_settles_after_each_state_change_and_skips_absent_opti
     calls = []
 
     class Page:
-        def fill(self, selector, value):
+        def fill(self, selector, value, timeout=None):
             calls.append(("fill", selector, value))
 
-        def press(self, selector, key):
+        def press(self, selector, key, timeout=None):
             calls.append(("press", selector, key))
 
-        def click(self, selector):
+        def click(self, selector, timeout=None):
             calls.append(("click", selector))
 
-        def select_option(self, selector, value):
+        def select_option(self, selector, value, timeout=None):
             calls.append(("select", selector, value))
 
         def wait_for_selector(self, selector, timeout):

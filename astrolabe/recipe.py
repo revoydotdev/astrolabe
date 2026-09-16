@@ -21,7 +21,7 @@ with getattr()/hasattr() and treats an absent attribute as "not used".
 
   def drive(page, log) -> None
       Optional custom interaction after SURFACES have all been visited (and
-      after the optional --crawl pass): drive search filters, open pagers,
+      before the optional --crawl pass, so actions start on the last surface): drive search filters, open pagers,
       scroll feeds, land on nested settings pages -- anything a plain page
       visit can't reach. `page` is the live cloakbrowser Page (Playwright-like
       API: page.goto/eval_on_selector_all/wait_for_timeout/...); `log` is a
@@ -139,15 +139,17 @@ class DeclarativeRecipe:
             elif kind == "scroll":
                 page.evaluate("pixels => window.scrollBy(0, pixels)", action["pixels"])
             elif kind == "click":
-                page.click(action["selector"])
+                page.click(action["selector"], timeout=action["timeout_ms"])
             elif kind == "press":
-                page.press(action["selector"], action["key"])
+                page.press(action["selector"], action["key"], timeout=action["timeout_ms"])
             elif kind == "select":
-                page.select_option(action["selector"], action["value"])
+                page.select_option(
+                    action["selector"], action["value"], timeout=action["timeout_ms"]
+                )
             elif kind == "search":
-                page.fill(action["selector"], action["value"])
+                page.fill(action["selector"], action["value"], timeout=action["timeout_ms"])
                 if action.get("submit"):
-                    page.press(action["selector"], "Enter")
+                    page.press(action["selector"], "Enter", timeout=action["timeout_ms"])
             if settle and kind not in {"wait", "wait_for"}:
                 settle(kind)
             log(f"[declarative] {index + 1}/{len(self.ACTIONS)} {kind}: {annotation}")
