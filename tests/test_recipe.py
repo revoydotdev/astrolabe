@@ -401,3 +401,89 @@ def test_main_exits_nonzero_on_errors(tmp_path, monkeypatch, capsys):
     assert exc_info.value.code == 1
     out = capsys.readouterr().out
     assert "error" in out
+
+
+def test_declarative_drive_settles_after_each_state_change_and_skips_absent_optionals():
+    from astrolabe.recipe import parse_declarative_recipe
+
+    recipe = parse_declarative_recipe(
+        {
+            "schema_version": 1,
+            "actions": [
+                {
+                    "action": "search",
+                    "selector": "#name",
+                    "value": "synthetic",
+                    "submit": True,
+                    "safe_annotation": "read-only name search",
+                },
+                {
+                    "action": "click",
+                    "selector": "#acknowledge",
+                    "optional": True,
+                    "timeout_ms": 50,
+                    "safe_annotation": "dismiss disclaimer",
+                },
+                {"action": "wait_for", "selector": ".results"},
+                {
+                    "action": "select",
+                    "selector": "#division",
+                    "value": "civil",
+                    "safe_annotation": "choose division",
+                },
+                {
+                    "action": "press",
+                    "selector": "#division",
+                    "key": "Enter",
+                    "safe_annotation": "submit filter",
+                },
+            ],
+        }
+    )
+    calls = []
+
+    class Page:
+        def fill(self, selector, value):
+            calls.append(("fill", selector, value))
+
+        def press(self, selector, key):
+            calls.append(("press", selector, key))
+
+        def click(self, selector):
+            calls.append(("click", selector))
+
+        def select_option(self, selector, value):
+            calls.append(("select", selector, value))
+
+        def wait_for_selector(self, selector, timeout):
+            if selector == "#acknowledge":
+                raise TimeoutError("absent")
+            calls.append(("wait_for", selector, timeout))
+
+    recipe.drive(Page(), lambda _m: None, settle=lambda kind: calls.append(("settle", kind)))
+    assert calls == [
+        ("fill", "#name", "synthetic"),
+        ("press", "#name", "Enter"),
+        ("settle", "search"),
+        ("wait_for", ".results", 5000),
+        ("select", "#division", "civil"),
+        ("settle", "select"),
+        ("press", "#division", "Enter"),
+        ("settle", "press"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"action": "press", "selector": "#q", "key": "Control+W", "safe_annotation": "x"},
+        {"action": "select", "selector": "#q", "safe_annotation": "x"},
+        {"action": "wait", "optional": True},
+        {"action": "click", "selector": "", "safe_annotation": "x"},
+    ],
+)
+def test_declarative_recipe_rejects_unbounded_new_actions(action):
+    from astrolabe.recipe import parse_declarative_recipe
+
+    with pytest.raises(ValueError):
+        parse_declarative_recipe({"schema_version": 1, "actions": [action]})

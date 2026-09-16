@@ -1607,12 +1607,13 @@ def main():
         def finish_action() -> None:
             interaction = active_action[0]
             if interaction is not None:
+                settled = interaction.get("settled", True)
                 interaction.update(
                     {
                         "calls": stats["n"] - interaction["calls_before"],
-                        "settled": True,
+                        "settled": settled,
                         "completed_at": datetime.now(UTC).isoformat(),
-                        "truncation_reason": None,
+                        "truncation_reason": None if settled else "settle_ceiling",
                     }
                 )
 
@@ -1623,7 +1624,26 @@ def main():
         try:
             strict_recipe_egress[0] = True
             if getattr(recipe, "declarative", False):
-                recipe.drive(page, log, start_action)
+
+                def settle_action(kind: str) -> None:
+                    outcome = settle_or_wait(
+                        page,
+                        stats,
+                        3.0,
+                        no_settle=a.no_settle,
+                        min_ms=a.settle_min_ms,
+                        settle_ms=a.settle_ms,
+                        ceiling_ms=a.settle_timeout_ms,
+                        log=log,
+                        label=f"action:{kind}",
+                        url=safe_url(getattr(page, "url", "")),
+                    )
+                    interaction = active_action[0]
+                    if outcome and interaction is not None:
+                        interaction["settle_seconds"] = outcome[0]
+                        interaction["settled"] = outcome[2]
+
+                recipe.drive(page, log, start_action, settle=settle_action)
             elif getattr(recipe, "sandboxed", False):
                 recipe.drive(
                     page,

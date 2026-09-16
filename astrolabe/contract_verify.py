@@ -204,6 +204,8 @@ def main():
                         resolve=True,
                     ),
                 )
+            elif getattr(recipe, "declarative", False):
+                recipe.drive(page, log, settle=lambda _kind: page.wait_for_timeout(2500))
             else:
                 recipe.drive(page, log)
         except Exception as e:

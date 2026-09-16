@@ -99,7 +99,15 @@ from typing import Any, Literal, Protocol
 Severity = Literal["error", "warning", "info"]
 
 DECLARATIVE_RECIPE_VERSION = 1
-DECLARATIVE_ACTIONS = frozenset({"scroll", "click", "search", "wait"})
+DECLARATIVE_ACTIONS = frozenset(
+    {"scroll", "click", "search", "wait", "wait_for", "press", "select"}
+)
+# Actions that change page state must say why they are safe to perform.
+ANNOTATED_ACTIONS = frozenset({"click", "search", "press", "select"})
+SELECTOR_ACTIONS = frozenset({"click", "search", "press", "select", "wait_for"})
+PRESS_KEYS = frozenset({"Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "Space"})
+MAX_DECLARATIVE_ACTIONS = 50
+MAX_SELECTOR_WAIT_MS = 15_000
 
 
 @dataclass(frozen=True)
@@ -109,28 +117,48 @@ class DeclarativeRecipe:
     ACTIVE_PROBES: list[dict[str, Any]]
     declarative = True
 
-    def drive(self, page: Any, log: Any, interaction: Any = None) -> None:
+    def drive(self, page: Any, log: Any, interaction: Any = None, settle: Any = None) -> None:
+        """Run each action, then let the page's API traffic settle before the next.
+
+        Without the settle step a click that fires an XHR is immediately followed by
+        the next action (or the end of the recipe), and the response it caused is
+        attributed to the wrong interaction or never observed at all.
+        """
         for index, action in enumerate(self.ACTIONS):
             kind = action["action"]
+            annotation = action.get("safe_annotation", "bounded read-only action")
+            if action.get("optional") and not _selector_appears(page, action):
+                log(f"[declarative] {index + 1}/{len(self.ACTIONS)} {kind}: skipped (absent)")
+                continue
             if interaction:
-                interaction(
-                    "input" if kind == "search" else kind,
-                    action.get("safe_annotation", "bounded read-only action"),
-                )
+                interaction("input" if kind in {"search", "select"} else kind, annotation)
             if kind == "wait":
                 page.wait_for_timeout(action["milliseconds"])
+            elif kind == "wait_for":
+                page.wait_for_selector(action["selector"], timeout=action["timeout_ms"])
             elif kind == "scroll":
                 page.evaluate("pixels => window.scrollBy(0, pixels)", action["pixels"])
             elif kind == "click":
                 page.click(action["selector"])
+            elif kind == "press":
+                page.press(action["selector"], action["key"])
+            elif kind == "select":
+                page.select_option(action["selector"], action["value"])
             elif kind == "search":
                 page.fill(action["selector"], action["value"])
                 if action.get("submit"):
                     page.press(action["selector"], "Enter")
-            log(
-                f"[declarative] {index + 1}/{len(self.ACTIONS)} {kind}: "
-                f"{action.get('safe_annotation', 'bounded read-only action')}"
-            )
+            if settle and kind not in {"wait", "wait_for"}:
+                settle(kind)
+            log(f"[declarative] {index + 1}/{len(self.ACTIONS)} {kind}: {annotation}")
+
+
+def _selector_appears(page: Any, action: dict[str, Any]) -> bool:
+    try:
+        page.wait_for_selector(action["selector"], timeout=action["timeout_ms"])
+    except Exception:
+        return False
+    return True
 
 
 def load_declarative_recipe(path: str) -> DeclarativeRecipe:
@@ -140,6 +168,11 @@ def load_declarative_recipe(path: str) -> DeclarativeRecipe:
             value = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot read declarative recipe: {exc}") from exc
+    return parse_declarative_recipe(value)
+
+
+def parse_declarative_recipe(value: Any) -> DeclarativeRecipe:
+    """Validate an in-memory declarative recipe; the single source of its rules."""
     if not isinstance(value, dict) or value.get("schema_version") != DECLARATIVE_RECIPE_VERSION:
         raise ValueError("declarative recipe requires schema_version 1")
     surfaces = value.get("surfaces") or []
@@ -149,25 +182,9 @@ def load_declarative_recipe(path: str) -> DeclarativeRecipe:
         raise ValueError("declarative recipe surfaces must be an array of URLs")
     if not isinstance(actions, list) or not all(isinstance(item, dict) for item in actions):
         raise ValueError("declarative recipe actions must be an array of objects")
-    normalized_actions = []
-    for index, action in enumerate(actions):
-        kind = action.get("action")
-        if kind not in DECLARATIVE_ACTIONS:
-            raise ValueError(f"action {index} has unsupported action {kind!r}")
-        normalized = dict(action)
-        if kind in {"click", "search"} and not normalized.get("safe_annotation"):
-            raise ValueError(f"action {index} requires safe_annotation")
-        if kind in {"click", "search"} and not isinstance(normalized.get("selector"), str):
-            raise ValueError(f"action {index} requires selector")
-        if kind == "search":
-            search_value = normalized.get("value")
-            if not isinstance(search_value, str) or not 1 <= len(search_value) <= 100:
-                raise ValueError(f"action {index} search value must contain 1-100 characters")
-        if kind == "wait":
-            normalized["milliseconds"] = min(max(int(normalized.get("milliseconds", 500)), 0), 5000)
-        if kind == "scroll":
-            normalized["pixels"] = min(max(int(normalized.get("pixels", 800)), -5000), 5000)
-        normalized_actions.append(normalized)
+    if len(actions) > MAX_DECLARATIVE_ACTIONS:
+        raise ValueError(f"declarative recipe allows at most {MAX_DECLARATIVE_ACTIONS} actions")
+    normalized_actions = [_normalize_action(index, action) for index, action in enumerate(actions)]
     if not isinstance(probes, list) or not all(isinstance(item, dict) for item in probes):
         raise ValueError("declarative recipe active_probes must be an array of objects")
     normalized_probes = []
@@ -179,6 +196,42 @@ def load_declarative_recipe(path: str) -> DeclarativeRecipe:
             raise ValueError(f"active probe {index} method {method} is not read-only")
         normalized_probes.append({"url": probe["url"], "method": method})
     return DeclarativeRecipe(list(surfaces), normalized_actions, normalized_probes)
+
+
+def _normalize_action(index: int, action: dict[str, Any]) -> dict[str, Any]:
+    kind = action.get("action")
+    if kind not in DECLARATIVE_ACTIONS:
+        raise ValueError(f"action {index} has unsupported action {kind!r}")
+    normalized = dict(action)
+    if kind in ANNOTATED_ACTIONS and not normalized.get("safe_annotation"):
+        raise ValueError(f"action {index} requires safe_annotation")
+    if kind in SELECTOR_ACTIONS:
+        selector = normalized.get("selector")
+        if not isinstance(selector, str) or not 1 <= len(selector) <= 500:
+            raise ValueError(f"action {index} requires selector")
+    if kind == "search":
+        search_value = normalized.get("value")
+        if not isinstance(search_value, str) or not 1 <= len(search_value) <= 100:
+            raise ValueError(f"action {index} search value must contain 1-100 characters")
+    if kind == "select":
+        option = normalized.get("value")
+        if not isinstance(option, str) or not 1 <= len(option) <= 200:
+            raise ValueError(f"action {index} select value must contain 1-200 characters")
+    if kind == "press" and normalized.get("key") not in PRESS_KEYS:
+        raise ValueError(f"action {index} key must be one of {sorted(PRESS_KEYS)}")
+    if "optional" in normalized and not isinstance(normalized["optional"], bool):
+        raise ValueError(f"action {index} optional must be a boolean")
+    if normalized.get("optional") and kind not in SELECTOR_ACTIONS - {"wait_for"}:
+        raise ValueError(f"action {index} only selector actions can be optional")
+    if kind in SELECTOR_ACTIONS:
+        normalized["timeout_ms"] = min(
+            max(int(normalized.get("timeout_ms", 5000)), 0), MAX_SELECTOR_WAIT_MS
+        )
+    if kind == "wait":
+        normalized["milliseconds"] = min(max(int(normalized.get("milliseconds", 500)), 0), 5000)
+    if kind == "scroll":
+        normalized["pixels"] = min(max(int(normalized.get("pixels", 800)), -5000), 5000)
+    return normalized
 
 
 @dataclass(frozen=True)
