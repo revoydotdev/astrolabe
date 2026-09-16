@@ -84,6 +84,12 @@ def build_from_capture(capture_dir):
     meta_path = os.path.join(capture_dir, "meta.json")
     run_meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
     run_id = run_meta.get("run_id") or os.path.basename(os.path.abspath(capture_dir))
+    # Evidence provenance: a normal capture is astrolabe's own headless browser
+    # observing live traffic; an imported HAR is evidence recorded elsewhere and
+    # merely converted here. The distinction MUST survive into the contract so a
+    # reader (human or agent) never mistakes imported evidence for something
+    # astrolabe itself watched happen.
+    observed_source = run_meta.get("evidence_source") or "astrolabe-capture"
     # Every observed return shape per op, plus statuses. Collecting all of them
     # (rather than keeping whichever serialised longest) is what lets the merge
     # recover nullability and which fields are actually always present.
@@ -165,6 +171,7 @@ def build_from_capture(capture_dir):
                     "samples": s["n"],
                     "run_id": run_id,
                     "observed_at": run_meta.get("completed_at") or run_meta.get("captured_at"),
+                    "source": observed_source,
                 },
                 "active": None,
                 "active_history": [],
@@ -210,7 +217,12 @@ def build_from_capture(capture_dir):
             "input_schema": input_schema,
             "return_schema": return_schema,
             "proof": {
-                "observed": {"ok": observed, "status": statuses, "samples": ep.get("calls", 0)},
+                "observed": {
+                    "ok": observed,
+                    "status": statuses,
+                    "samples": ep.get("calls", 0),
+                    "source": observed_source,
+                },
                 "active": None,
             },
         }
@@ -237,7 +249,12 @@ def build_from_capture(capture_dir):
             "input_schema": input_schema,
             "return_schema": None,
             "proof": {
-                "observed": {"ok": calls > 0, "status": [], "samples": calls},
+                "observed": {
+                    "ok": calls > 0,
+                    "status": [],
+                    "samples": calls,
+                    "source": observed_source,
+                },
                 "active": None,
             },
         }
@@ -516,9 +533,10 @@ def render_md(contract, drift=None):
         "|---|---|---|---|---|---|",
     ]
     for k, o in sorted(contract["operations"].items()):
+        imported = (o["proof"].get("observed") or {}).get("source") == "har-import"
         st = {
             "verified-active": "✅ active",
-            "verified-observed": "🟢 observed",
+            "verified-observed": "🟢 imported" if imported else "🟢 observed",
             "typed-unproven": "🟡 typed",
             "listed": "⚪ listed",
             "historical": "◌ historical",

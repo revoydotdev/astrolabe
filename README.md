@@ -183,6 +183,11 @@ astrolabe map example.com \
 astrolabe challenge https://example.com/ --domain example.com \
     --out cookies.json --local            # Byparr solve -> 0600 cookie file + solving agent
 
+astrolabe import-har capture.har \        # convert a HAR recorded elsewhere into chartable evidence
+    --domain example.com \                  # first-party host to keep traffic for
+    [--out DIR] [--no-contract-store]
+    # -> contract.md (contract of record) + map.md + endpoints.json, same as `map`
+
 astrolabe contract <capture-dir> \        # versioned typed inventory + observation/proof history
     [--merge prior/contract.json]           # union across runs (completeness) + drift
     [--execute --cookies-file cookies.json --domain example.com]  # actively re-verify
@@ -203,6 +208,27 @@ astrolabe replay example.com --op op.json \   # browserless, TLS-matched, high-f
 bundle, chunk manifest, dynamic-import, and source-map evidence without
 flattening provenance or confidence. It never invents an executable operation
 from a static candidate — it hands you evidence to review, not a guess.
+
+### Import a HAR
+
+`astrolabe map` charts traffic astrolabe's own headless browser observed. If
+you already have traffic recorded elsewhere — Chrome DevTools' Network tab
+via "Save all as HAR", any other browser's HAR export, a proxy dump — `import-har`
+converts it into the same capture-dir shape astrolabe's own capture engine
+produces, so `analyze`/`contract`/`mcp-gen` consume it without caring where
+the evidence came from. It keeps only first-party XHR/fetch traffic, and
+only ever persists structural shapes and header/query *presence*, never
+values: a HAR routinely carries live session cookies, bearer tokens, and PII
+in exactly the fields that never make it into `capture.jsonl`. Every record
+and the run's `meta.json` is stamped `evidence_source: "har-import"`, and the
+resulting `contract.md` marks those operations `imported` rather than
+`observed` — imported evidence is never presented as something astrolabe
+itself watched happen.
+
+```
+astrolabe import-har capture.har --domain example.com --out ./astrolabe-example.com
+astrolabe mcp-gen ./astrolabe-example.com   # same as after a live `astrolabe map`
+```
 
 ## Status
 

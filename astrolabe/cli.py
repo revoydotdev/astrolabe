@@ -645,6 +645,84 @@ def _publish_contract(a, domain: str, produced: str) -> None:
     print(f"[contract] contract of record for {domain} -> {published}")
 
 
+def _analyze_contract_and_seal(
+    out: str,
+    final_out: str,
+    dom: str,
+    a,
+    *,
+    run_id: str,
+    artifact_type: str,
+    extra_artifact_names: tuple[str, ...] = (),
+) -> list[str]:
+    """Shared tail of the capture pipeline: analyze -> durable typed contract ->
+    artifact manifest. Used by both `astrolabe map` (after a live capture) and
+    `astrolabe import-har` (after converting a HAR into the same capture-dir
+    shape produced by capture.py's flush_meta()), so the two commands stay
+    identical from this point on. Returns the sealed artifact name list,
+    including the manifest file itself; the caller still promotes the staging
+    directory.
+    """
+    recs, meta = az.load(out)
+    prior_graph = os.path.join(final_out, "graph.json")
+    nops, nrest = az.render(
+        out, recs, meta, prior_graph=prior_graph if os.path.exists(prior_graph) else None
+    )
+    print(f"[analyze] {nops} gql ops, {nrest} rest -> {out}/map.md")
+
+    # durable typed contract (observed proof) — merges the prior contract in this
+    # out dir so the map completes across runs and drift is surfaced. The contract,
+    # not the map, is the artifact downstream active tooling depends on.
+    prior = _prior_contract(a, dom) or os.path.join(final_out, "contract.json")
+    import sys as _s
+
+    _s.argv = ["contract", out] + (["--merge", str(prior)] if os.path.exists(prior) else [])
+    ct.main()
+    _publish_contract(a, dom, os.path.join(out, "contract.json"))
+
+    required = (
+        "capture.jsonl",
+        "meta.json",
+        "graphql-names.txt",
+        "transfer-manifest.json",
+        "graph.json",
+        "map.md",
+        "endpoints.json",
+        "contract.json",
+        "contract.md",
+    )
+    missing = [name for name in required if not os.path.isfile(os.path.join(out, name))]
+    if missing:
+        raise PartialCaptureError(
+            f"run is partial; required staged artifacts missing: {', '.join(missing)}"
+        )
+    promoted = list(required) + [
+        name for name in extra_artifact_names if os.path.isfile(os.path.join(out, name))
+    ]
+    from .artifact import build_manifest, utc_now, write_manifest
+
+    meta = json.load(open(os.path.join(out, "meta.json")))
+    now = utc_now()
+    manifest = build_manifest(
+        out,
+        artifact_type=artifact_type,
+        artifact_schema_version=1,
+        run_id=str(meta.get("run_id") or run_id),
+        target=dom,
+        completeness="complete",
+        started_at=str(meta.get("started_at") or meta.get("captured_at") or now),
+        completed_at=str(meta.get("completed_at") or meta.get("captured_at") or now),
+        artifact_names=promoted,
+        profile=getattr(a, "profile", None),
+        failures=list(meta.get("failures") or []),
+        truncations=dict(meta.get("truncations") or {}),
+        safety_mode="read-only",
+    )
+    write_manifest(os.path.join(out, "artifact-manifest.json"), manifest)
+    promoted.append("artifact-manifest.json")
+    return promoted
+
+
 @_guaranteed_cleanup
 def cmd_map(a):
     hp = _resolve(a)
@@ -904,71 +982,21 @@ def cmd_map(a):
         _require_success(orr, "OpenAPI generation")
         get(hp, f"{rdir}/openapi.json", os.path.join(out, "openapi.json"))
 
-    # 7. analyze -> map.md + endpoints.json
-    recs, meta = az.load(out)
-    prior_graph = os.path.join(final_out, "graph.json")
-    nops, nrest = az.render(
-        out,
-        recs,
-        meta,
-        prior_graph=prior_graph if os.path.exists(prior_graph) else None,
-    )
-    print(f"[analyze] {nops} gql ops, {nrest} rest -> {out}/map.md")
-
-    # 7b. durable typed contract (observed proof) — merges the prior contract in this
-    #     out dir so the map completes across runs and drift is surfaced. The contract,
-    #     not the map, is the artifact downstream active tooling depends on.
-    prior = _prior_contract(a, dom) or os.path.join(final_out, "contract.json")
-    import sys as _s
-
-    _s.argv = ["contract", out] + (["--merge", str(prior)] if os.path.exists(prior) else [])
-    ct.main()
-    _publish_contract(a, dom, os.path.join(out, "contract.json"))
-
-    # 8. cleanup — remote tmpfs (cookies + auth headers + captures) AND local cookies
+    # 7. cleanup — remote tmpfs (cookies + auth headers + captures) AND local cookies
     ssh_argv(hp, ["rm", "-rf", "--", rdir], timeout=20)
     _remove_local_secret(cookies_local)
     print(f"[cleanup] removed {hp.host}:{rdir} + local cookies")
-    required = (
-        "capture.jsonl",
-        "meta.json",
-        "graphql-names.txt",
-        "transfer-manifest.json",
-        "graph.json",
-        "map.md",
-        "endpoints.json",
-        "contract.json",
-        "contract.md",
-    )
-    missing = [name for name in required if not os.path.isfile(os.path.join(out, name))]
-    if missing:
-        raise PartialCaptureError(
-            f"run is partial; required staged artifacts missing: {', '.join(missing)}"
-        )
-    promoted = list(required) + [
-        name for name in ("schema.json", "openapi.json") if os.path.isfile(os.path.join(out, name))
-    ]
-    from .artifact import build_manifest, utc_now, write_manifest
 
-    meta = json.load(open(os.path.join(out, "meta.json")))
-    now = utc_now()
-    manifest = build_manifest(
+    # 8. analyze -> map.md + endpoints.json -> durable typed contract -> artifact manifest
+    promoted = _analyze_contract_and_seal(
         out,
+        final_out,
+        dom,
+        a,
+        run_id=run_id,
         artifact_type="capture-pipeline",
-        artifact_schema_version=1,
-        run_id=str(meta.get("run_id") or run_id),
-        target=dom,
-        completeness="complete",
-        started_at=str(meta.get("started_at") or meta.get("captured_at") or now),
-        completed_at=str(meta.get("completed_at") or meta.get("captured_at") or now),
-        artifact_names=promoted,
-        profile=getattr(a, "profile", None),
-        failures=list(meta.get("failures") or []),
-        truncations=dict(meta.get("truncations") or {}),
-        safety_mode="read-only",
+        extra_artifact_names=("schema.json", "openapi.json"),
     )
-    write_manifest(os.path.join(out, "artifact-manifest.json"), manifest)
-    promoted.append("artifact-manifest.json")
     _promote_staging_directory(out, final_out)
     print(
         f"\n✓ {final_out}/contract.md (contract of record) | map.md | endpoints.json"
@@ -1082,6 +1110,42 @@ def cmd_import_openapi(a):
         + [value for spec in a.external_ref for value in ("--external-ref", spec)]
     )
     oi.main()
+
+
+@_guaranteed_cleanup
+def cmd_import_har(a):
+    """Convert traffic recorded elsewhere (Chrome DevTools "Save all as HAR", or
+    any HAR-emitting tool) into an astrolabe capture dir, then run the same
+    analyze -> contract -> artifact-manifest tail `astrolabe map` runs after a
+    live capture, so the imported evidence is chartable by mcp-gen exactly like
+    astrolabe's own captures. Fully local: no pipeline host, no browser, no
+    network egress -- the HAR is already on disk.
+    """
+    from . import har_import as hi
+
+    dom = normalize_host(a.domain)
+    final_out = os.path.abspath(a.out or f"./astrolabe-{dom}")
+    os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
+    out = tempfile.mkdtemp(prefix=".astrolabe-stage-", dir=os.path.dirname(final_out) or ".")
+    _track_staging_dir(out, preserve_as=f"{final_out}.partial")
+
+    summary = hi.import_har(a.har_file, dom, out)
+    print(
+        f"[import-har] {summary['entries_kept']}/{summary['entries_total']} entries kept "
+        f"({summary['failures']} failure(s)) -> {out}/capture.jsonl"
+    )
+
+    promoted = _analyze_contract_and_seal(
+        out,
+        final_out,
+        dom,
+        a,
+        run_id=summary["run_id"],
+        artifact_type="har-import",
+    )
+    _promote_staging_directory(out, final_out)
+    print(f"\n✓ {final_out}/contract.md (contract of record) | map.md | endpoints.json")
+    return {"out": final_out, "artifacts": promoted, **summary}
 
 
 @_guaranteed_cleanup
@@ -1626,6 +1690,26 @@ def build_parser():
         help="authorize one exact external $ref URI using a bounded local document",
     )
     io_p.set_defaults(func=cmd_import_openapi)
+
+    ih_p = sub.add_parser(
+        "import-har",
+        parents=[machine],
+        help="convert a HAR capture into chartable evidence (analyze + contract, no live capture)",
+    )
+    ih_p.add_argument("har_file", help="path to a HAR 1.2 JSON file")
+    ih_p.add_argument("--domain", required=True, help="first-party host to keep traffic for")
+    ih_p.add_argument("--out", help="output dir (default ./astrolabe-<domain>)")
+    ih_p.add_argument(
+        "--contract-store",
+        help="directory holding the per-domain contract of record "
+        "(default: .astrolabe/contracts, or ASTROLABE_CONTRACT_STORE)",
+    )
+    ih_p.add_argument(
+        "--no-contract-store",
+        action="store_true",
+        help="keep this run's contract to itself instead of accumulating per domain",
+    )
+    ih_p.set_defaults(func=cmd_import_har)
 
     sc = sub.add_parser(
         "scan", parents=[machine], help="deterministic source-scan → recipe scaffold"

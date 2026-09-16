@@ -1,0 +1,201 @@
+{
+  "log": {
+    "version": "1.2",
+    "creator": { "name": "WebInspector", "version": "537.36" },
+    "entries": [
+      {
+        "startedDateTime": "2026-01-01T10:00:00.000Z",
+        "time": 42,
+        "_resourceType": "xhr",
+        "request": {
+          "method": "POST",
+          "url": "https://example.com/api/search?alias=search",
+          "headers": [
+            { "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" },
+            { "name": "Cookie", "value": "session=sess_9f8e7d6c5b4a3210" },
+            { "name": "Content-Type", "value": "application/json" }
+          ],
+          "postData": {
+            "mimeType": "application/json",
+            "text": "{\"q\": \"shoes\", \"page\": 1}"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"results\": [{\"id\": 1, \"title\": \"Running shoes\"}], \"page\": 1, \"has_more\": true}"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:01.000Z",
+        "time": 39,
+        "_resourceType": "xhr",
+        "request": {
+          "method": "POST",
+          "url": "https://example.com/api/search?alias=search",
+          "headers": [
+            { "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" },
+            { "name": "Cookie", "value": "session=sess_9f8e7d6c5b4a3210" },
+            { "name": "Content-Type", "value": "application/json" }
+          ],
+          "postData": {
+            "mimeType": "application/json",
+            "text": "{\"q\": \"shoes\", \"page\": 2}"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"results\": [{\"id\": 2, \"title\": \"Trail shoes\"}], \"page\": 2, \"has_more\": false}"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:02.000Z",
+        "time": 15,
+        "_resourceType": "fetch",
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/api/profile?id=42",
+          "headers": [
+            { "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" },
+            { "name": "Cookie", "value": "session=sess_9f8e7d6c5b4a3210" }
+          ]
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"id\": 42, \"email\": \"alice.example.pii@example.com\"}"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:03.000Z",
+        "time": 20,
+        "_resourceType": "fetch",
+        "request": {
+          "method": "POST",
+          "url": "https://example.com/graphql",
+          "headers": [
+            { "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" },
+            { "name": "Content-Type", "value": "application/json" }
+          ],
+          "postData": {
+            "mimeType": "application/json",
+            "text": "{\"operationName\": \"Viewer\", \"query\": \"query Viewer { viewer { id name } }\", \"variables\": {}}"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"data\": {\"viewer\": {\"id\": \"1\", \"name\": \"Ann\"}}}"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:04.000Z",
+        "time": 8,
+        "_resourceType": "xhr",
+        "request": {
+          "method": "GET",
+          "url": "https://analytics.example-cdn.net/collect?id=s3cr3t-bearer-abcdef123456",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "text/plain" }],
+          "content": { "mimeType": "text/plain", "text": "ok" }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:05.000Z",
+        "time": 5,
+        "_resourceType": "image",
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/static/logo.png",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "image/png" }],
+          "content": { "mimeType": "image/png", "size": 128 }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:06.000Z",
+        "time": 11,
+        "_resourceType": "xhr",
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/api/config",
+          "headers": [{ "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" }]
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "encoding": "base64",
+            "text": "eyJmbGFnIjogdHJ1ZSwgInJlZ2lvbiI6ICJ1cy1lYXN0In0="
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:07.000Z",
+        "time": 14,
+        "_resourceType": "fetch",
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/api/profile?id=43",
+          "headers": [
+            { "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" },
+            { "name": "Cookie", "value": "session=sess_9f8e7d6c5b4a3210" }
+          ]
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "text": "{\"id\": 43, \"email\": \"bob.example.pii@example.com\"}"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:08.000Z",
+        "time": 9,
+        "_resourceType": "xhr",
+        "request": {
+          "method": "GET",
+          "url": "https://example.com/api/config",
+          "headers": [{ "name": "Authorization", "value": "Bearer s3cr3t-bearer-abcdef123456" }]
+        },
+        "response": {
+          "status": 200,
+          "headers": [{ "name": "Content-Type", "value": "application/json" }],
+          "content": {
+            "mimeType": "application/json",
+            "encoding": "base64",
+            "text": "eyJmbGFnIjogdHJ1ZSwgInJlZ2lvbiI6ICJ1cy1lYXN0In0="
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-01-01T10:00:09.000Z",
+        "time": 3,
+        "_resourceType": "xhr",
+        "comment": "malformed entry: no request object at all"
+      }
+    ]
+  }
+}
