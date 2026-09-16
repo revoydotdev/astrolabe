@@ -86,6 +86,7 @@ def _launch_playwright_context(**kw):
             "ignore_https_errors",
             "record_har_path",
             "record_har_mode",
+            "user_agent",
         )
         if key in kw
     }

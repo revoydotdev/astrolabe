@@ -22,7 +22,7 @@ from . import contract_store
 from . import profile as prof
 from . import browser as br
 from .artifact import atomic_write_json
-from .security import normalize_host, safe_text
+from .security import normalize_host, safe_text, validate_url
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _CLEANUP_STACK: list[list[Callable[[], Any]]] = []
@@ -779,6 +779,10 @@ def cmd_map(a):
         *([] if getattr(a, "browser", None) or attached else ["--har"]),
         "--introspect",
     ]
+    if getattr(a, "user_agent", None):
+        if attached:
+            raise ConfigurationError("--user-agent cannot combine with --cdp-endpoint")
+        cap += ["--user-agent", a.user_agent]
     if attached:
         cap += ["--cdp-endpoint", attached]
     elif not a.no_auth:
@@ -1321,6 +1325,37 @@ def cmd_contract(a):
     _publish_contract(a, domain, os.path.join(cap, "contract.json"))
 
 
+def cmd_challenge(a):
+    """Solve one challenge with Byparr and stage its cookies as a private cookie file.
+
+    Only names and the solving user agent are reported; cookie values stay in the file.
+    """
+    from . import capture as cap
+
+    hp = _resolve(a)
+    if not hp.local:
+        raise SafetyRefusalError("challenge solving writes local credentials; use --local")
+    url = validate_url(a.url, {normalize_host(a.domain)}, schemes=("https",), resolve=True)
+    if not 10 <= a.timeout <= 180:
+        raise ConfigurationError("challenge timeout must be between 10 and 180 seconds")
+    try:
+        result = cap.byparr_solve(hp.byparr, url, timeout_s=a.timeout)
+    except OSError as exc:
+        raise CommandExecutionError(f"byparr is unreachable at {hp.byparr}: {exc}") from exc
+    solution = result.get("solution") or {}
+    cookies = cap.challenge_cookies(solution, normalize_host(a.domain))
+    if not cookies:
+        raise PartialCaptureError("byparr returned no cookies for the target domain")
+    out = os.path.abspath(a.out)
+    atomic_write_json(out, cookies, mode=0o600)
+    return {
+        "cookies_file": out,
+        "cookie_names": sorted({cookie["name"] for cookie in cookies}),
+        "status": solution.get("status"),
+        "user_agent": solution.get("userAgent") or None,
+    }
+
+
 def cmd_recipe(a):
     """Lint a per-site recipe .py, delegating to astrolabe.recipe exactly the way
     cmd_mcpgen/cmd_contract delegate to their modules (build sys.argv, call
@@ -1465,6 +1500,10 @@ def build_parser():
         help="explicitly import this domain's cookies from a local Linux browser",
     )
     m.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
+    m.add_argument(
+        "--user-agent",
+        help="capture user agent; use the agent returned by `challenge` with its cookies",
+    )
     m.add_argument(
         "--cdp-endpoint",
         help="attach to a running local Chromium (http://127.0.0.1:PORT, started with "
@@ -1703,6 +1742,19 @@ def build_parser():
     )
     ct_p.add_argument("--timeout", type=int, default=400)
     ct_p.set_defaults(func=cmd_contract)
+
+    ch = sub.add_parser(
+        "challenge",
+        parents=[machine],
+        help="solve an anti-bot challenge with Byparr into a private cookie file",
+    )
+    ch.add_argument("url")
+    ch.add_argument("--domain", required=True, help="target domain the cookies must belong to")
+    ch.add_argument("--out", required=True, help="Playwright cookie JSON to write (mode 0600)")
+    ch.add_argument("--timeout", type=int, default=60, help="solve timeout in seconds")
+    ch.add_argument("--local", action="store_true", default=None)
+    ch.add_argument("--host", default=None)
+    ch.set_defaults(func=cmd_challenge)
 
     rp = sub.add_parser(
         "recipe", parents=[machine], help="lint a per-site recipe .py (SURFACES + drive())"

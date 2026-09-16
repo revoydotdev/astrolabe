@@ -36,6 +36,7 @@ try:
     from astrolabe.security import (
         atomic_write_json,
         atomic_write_text,
+        host_matches,
         is_first_party as _shared_is_first_party,
         request_metadata,
         safe_text,
@@ -63,6 +64,7 @@ except ImportError:  # standalone deployment on the capture host
     from security import (  # type: ignore[import-not-found,no-redef]
         atomic_write_json,
         atomic_write_text,
+        host_matches,
         is_first_party as _shared_is_first_party,
         request_metadata,
         safe_text,
@@ -331,7 +333,7 @@ def rate_stopped(directory, origin):
     return bool(directory and os.path.exists(rate_stop_path(directory, origin)))
 
 
-def browser_context_options(proxy, outdir, *, record_har=False):
+def browser_context_options(proxy, outdir, *, record_har=False, user_agent=None):
     options = {
         "headless": True,
         "stealth_args": True,
@@ -344,6 +346,8 @@ def browser_context_options(proxy, outdir, *, record_har=False):
     }
     if proxy:
         options["proxy"] = proxy
+    if user_agent:
+        options["user_agent"] = user_agent
     if record_har:
         options["record_har_path"] = os.path.join(outdir, "capture.har")
         options["record_har_mode"] = "full"
@@ -480,11 +484,50 @@ def load_recipe(path, *, allow_inprocess=False):
     return m
 
 
-def byparr_solve(endpoint, url, timeout=60000):
-    body = json.dumps({"cmd": "request.get", "url": url, "maxTimeout": timeout}).encode()
+def byparr_solve(endpoint, url, timeout_s=60):
+    """Solve a challenge with Byparr's /v1 LinkRequest contract.
+
+    Byparr takes `max_timeout` in seconds; FlareSolverr's millisecond `maxTimeout`
+    is not part of its schema and was silently ignored.
+    """
+    body = json.dumps({"cmd": "request.get", "url": url, "max_timeout": int(timeout_s)}).encode()
     req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout / 1000 + 10) as r:
-        return json.loads(r.read())
+    with urllib.request.urlopen(req, timeout=timeout_s + 30) as r:
+        result = json.loads(r.read())
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        message = result.get("message") if isinstance(result, dict) else None
+        raise RuntimeError(f"byparr did not solve the challenge: {safe_text(message)[:200]}")
+    return result
+
+
+def challenge_cookies(solution, base):
+    """Playwright cookies from a Byparr Solution, limited to the target's own domain."""
+    cookies = []
+    for cookie in solution.get("cookies") or []:
+        if not isinstance(cookie, dict) or not cookie.get("name"):
+            continue
+        domain = str(cookie.get("domain") or "." + base)
+        cookie_host = domain.lstrip(".").lower()
+        # Browser domain-matching: the target must be the cookie domain or beneath it
+        # (a parent-domain __cf_bm is sent to the target). Single-label domains are
+        # never valid cookie scopes.
+        if "." not in cookie_host or not host_matches(base, cookie_host):
+            continue
+        entry = {
+            "name": cookie["name"],
+            "value": str(cookie.get("value") or ""),
+            "domain": domain,
+            "path": cookie.get("path") or "/",
+        }
+        if isinstance(cookie.get("expires"), (int, float)) and cookie["expires"] > 0:
+            entry["expires"] = cookie["expires"]
+        for flag in ("httpOnly", "secure"):
+            if isinstance(cookie.get(flag), bool):
+                entry[flag] = cookie[flag]
+        if cookie.get("sameSite") in {"Lax", "None", "Strict"}:
+            entry["sameSite"] = cookie["sameSite"]
+        cookies.append(entry)
+    return cookies
 
 
 # ---- adaptive settle detection ---------------------------------------------
@@ -655,6 +698,11 @@ def main():
     ap.add_argument("--proxy", default=None)
     ap.add_argument("--byparr", default=None, help="byparr /v1 endpoint for CF fallback")
     ap.add_argument(
+        "--user-agent",
+        default=None,
+        help="browser user agent; pair with challenge cookies minted under that agent",
+    )
+    ap.add_argument(
         "--cdp-endpoint",
         default=None,
         help="attach to a running loopback Chromium (http://127.0.0.1:PORT) and reuse "
@@ -706,10 +754,10 @@ def main():
         "sleep(wait) behavior (debugging escape hatch)",
     )
     a = ap.parse_args()
-    if a.cdp_endpoint and (a.cookies or a.proxy or a.har):
+    if a.cdp_endpoint and (a.cookies or a.proxy or a.har or a.user_agent):
         raise SystemExit(
             "--cdp-endpoint reuses the attached browser's own session; it cannot combine "
-            "with --cookies, --proxy, or --har"
+            "with --cookies, --proxy, --har, or --user-agent"
         )
     for option, value in (
         ("--max-total-requests", a.max_total_requests),
@@ -850,7 +898,7 @@ def main():
         page = ctx.new_page()
         traffic = page
     else:
-        kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
+        kw = browser_context_options(a.proxy, a.outdir, record_har=a.har, user_agent=a.user_agent)
         ctx = launch_context(**kw)
         traffic = ctx
     if a.recover_persisted:
@@ -1424,20 +1472,25 @@ def main():
                 log(f"[cf] challenge on {url} -> byparr")
                 events["cf"].append(url)
                 try:
-                    sol = byparr_solve(a.byparr, url).get("solution", {})
+                    sol = byparr_solve(a.byparr, url).get("solution") or {}
                     cks = [
-                        {
-                            "name": c["name"],
-                            "value": c["value"],
-                            "domain": c.get("domain", "." + base),
-                            "path": c.get("path", "/"),
-                        }
-                        for c in sol.get("cookies", [])
+                        c
+                        for c in challenge_cookies(sol, base)
                         if c["name"] in ("cf_clearance", "__cf_bm")
                     ]
                     if cks:
                         ctx.add_cookies(cks)
-                        events["byparr"].append({"url": url, "injected": [c["name"] for c in cks]})
+                        solver_agent = str(sol.get("userAgent") or "")
+                        if solver_agent:
+                            # Clearance is bound to the agent that solved it.
+                            page.set_extra_http_headers({"User-Agent": solver_agent})
+                        events["byparr"].append(
+                            {
+                                "url": url,
+                                "injected": [c["name"] for c in cks],
+                                "user_agent_aligned": bool(solver_agent),
+                            }
+                        )
                         page.goto(url, wait_until="domcontentloaded")
                         _settle("byparr-retry")
                         log(f"[byparr] injected {[c['name'] for c in cks]}, retried")

@@ -57,6 +57,7 @@ def test_all_subcommands_registered():
         "contract",
         "recipe",
         "import-openapi",
+        "challenge",
         "inspect-artifact",
         "migrate-artifact",
         "check",

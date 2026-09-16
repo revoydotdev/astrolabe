@@ -653,3 +653,75 @@ def test_structured_media_type_that_fails_to_decode_still_raises(capture):
 
     with pytest.raises(ValueError):
         capture.response_payload(Broken(), 1024)
+
+
+def test_byparr_client_speaks_the_link_request_contract(capture):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received = {}
+
+    class Byparr(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):  # noqa: N802
+            received.update(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+            body = json.dumps(
+                {
+                    "status": "ok",
+                    "message": "Success",
+                    "startTimestamp": 1,
+                    "solution": {
+                        "url": received["url"],
+                        "status": 200,
+                        "userAgent": "Solver/1.0",
+                        "cookies": [
+                            {
+                                "name": "__cf_bm",
+                                "value": "v",
+                                "domain": ".example.com",
+                                "path": "/",
+                                "expires": 2e9,
+                                "httpOnly": True,
+                                "secure": True,
+                                "sameSite": "None",
+                            },
+                            {"name": "cf_clearance", "value": "v", "domain": "app.example.com"},
+                            {"name": "tracker", "value": "v", "domain": ".other.com"},
+                            {"name": "sibling", "value": "v", "domain": "api.example.com"},
+                            {"name": "tld", "value": "v", "domain": ".com"},
+                        ],
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), Byparr)
+    threading.Thread(target=server.handle_request, daemon=True).start()
+    endpoint = f"http://127.0.0.1:{server.server_address[1]}/v1"
+    result = capture.byparr_solve(endpoint, "https://app.example.com/", timeout_s=45)
+    server.server_close()
+    assert received == {"cmd": "request.get", "url": "https://app.example.com/", "max_timeout": 45}
+    cookies = capture.challenge_cookies(result["solution"], "app.example.com")
+    assert [c["name"] for c in cookies] == ["__cf_bm", "cf_clearance"]
+    assert cookies[0]["sameSite"] == "None" and cookies[0]["httpOnly"] is True
+
+
+def test_byparr_failure_status_raises(capture, monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"status":"error","message":"Challenge not solved"}'
+
+    monkeypatch.setattr(capture.urllib.request, "urlopen", lambda *a, **k: Response())
+    with pytest.raises(RuntimeError, match="Challenge not solved"):
+        capture.byparr_solve("http://127.0.0.1:1/v1", "https://example.com/")
