@@ -1729,16 +1729,18 @@ def main():
         for h, v in last_auth.items():
             if not h.startswith("_") and h not in sess_hdrs:
                 sess_hdrs[h] = v
-        # auto-generate page-context headers the API may validate (x-referer,
-        # x-page-unique-id). These match what the SPA sends on its own XHRs.
-        import base64 as _b64
+        # Page-context headers some APIs validate (x-referer, x-page-unique-id) are
+        # only added when the recipe asks for them; sending them unconditionally made
+        # every probe distinguishable from the SPA's own traffic on most sites.
+        if getattr(recipe, "PAGE_CONTEXT_HEADERS", False):
+            import base64 as _b64
 
-        try:
-            cur_url = page.url
-            sess_hdrs.setdefault("x-referer", cur_url)
-            sess_hdrs.setdefault("x-page-unique-id", _b64.b64encode(cur_url.encode()).decode())
-        except Exception:
-            pass
+            try:
+                cur_url = page.url
+                sess_hdrs.setdefault("x-referer", cur_url)
+                sess_hdrs.setdefault("x-page-unique-id", _b64.b64encode(cur_url.encode()).decode())
+            except Exception:
+                pass
 
         for probe in probes:
             method = probe.get("method", "GET")
@@ -1751,7 +1753,8 @@ def main():
             )
             hdrs = dict(sess_hdrs)
             hdrs["accept"] = "application/json, text/plain, */*"
-            hdrs["x-api-correlation-id"] = __import__("uuid").uuid4().hex
+            if getattr(recipe, "PAGE_CONTEXT_HEADERS", False):
+                hdrs["x-api-correlation-id"] = __import__("uuid").uuid4().hex
             if method == "POST" and body:
                 hdrs["content-type"] = "application/json"
             fetch_opts = {"method": method, "headers": hdrs}

@@ -51,6 +51,11 @@ with getattr()/hasattr() and treats an absent attribute as "not used".
       {"x-api-key": "localStorage.getItem('apiKey')"}. Evaluated once, after
       drive(), before ACTIVE_PROBES fire.
 
+  PAGE_CONTEXT_HEADERS: bool
+      When true, ACTIVE_PROBES also send x-referer, x-page-unique-id, and
+      x-api-correlation-id, for the rare API that validates them. Off by
+      default because on every other site they mark probes as synthetic.
+
   AUTH_HEADERS: list[str]
       Extra exact header names, beyond capture.py's generic defaults
       (AUTH_HEADER_NAMES_DEFAULT), that should always be treated as part of
@@ -263,6 +268,7 @@ class RecipeModule(Protocol):
     SESS_HEADER_HARVEST: dict[str, str]
     AUTH_HEADERS: list[str]
     AUTH_HEADER_PATTERN: str
+    PAGE_CONTEXT_HEADERS: bool
 
     def drive(self, page: Any, log: Any) -> None: ...
 
@@ -279,6 +285,7 @@ KNOWN_ATTRS = frozenset(
         "SESS_HEADER_HARVEST",
         "AUTH_HEADERS",
         "AUTH_HEADER_PATTERN",
+        "PAGE_CONTEXT_HEADERS",
     }
 )
 KNOWN_FUNCS = frozenset({"drive"})
