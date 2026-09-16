@@ -670,7 +670,7 @@ def settle_or_wait(
     return elapsed, n_calls, settled
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cookies")
     ap.add_argument("--recipe")
@@ -753,7 +753,11 @@ def main():
         help="disable settle detection; restore the old flat "
         "sleep(wait) behavior (debugging escape hatch)",
     )
-    a = ap.parse_args()
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
     if a.cdp_endpoint and (a.cookies or a.proxy or a.har or a.user_agent):
         raise SystemExit(
             "--cdp-endpoint reuses the attached browser's own session; it cannot combine "
