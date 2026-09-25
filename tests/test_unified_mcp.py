@@ -15,7 +15,9 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 
+from astrolabe.mapping_mcp import create_server
 from astrolabe.unified_mcp import (
+    _MAX_INSTRUCTIONS_CHARS,
     _collect_toolpack_paths,
     _sanitize_namespace,
     create_unified_server,
@@ -393,3 +395,88 @@ async def test_two_packs_same_domain_second_is_rejected(tmp_workspace):
     # The skip was recorded with the collision reason
     skip_paths = {p for p, _ in server.unified_skipped}
     assert str(p2) in skip_paths
+
+
+# ----- composed instructions -------------------------------------------------
+
+# Occurs exactly once inside a single pack contract, so counting it counts contract
+# blocks. "UPSTREAM_AUTH_EXPIRED" cannot be used for this: the contract names it
+# twice, so a substring count would report 2 for a single mounted pack.
+_CONTRACT_MARKER = "do not retry it yourself"
+
+
+async def test_instructions_carry_the_typed_contract(tmp_workspace, qualcomm_pack, monkeypatch):
+    """The flip of a baseline that proved mounting contributed no instructions.
+
+    An agent that cannot see ``UPSTREAM_AUTH_EXPIRED`` will hand-retry an expired
+    credential and re-run mutations the server already declined to auto-retry.
+    """
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    server = create_unified_server()
+    assert server.unified_namespaces
+    instructions = server.instructions or ""
+    mapping = create_server(tmp_workspace).instructions
+    assert mapping is not None
+    assert "UPSTREAM_AUTH_EXPIRED" in instructions
+    assert mapping in instructions
+
+
+async def test_instructions_without_packs_are_the_mapping_string(tmp_workspace):
+    server = create_unified_server()
+    assert server.instructions == create_server(tmp_workspace).instructions
+
+
+async def test_skipped_pack_contributes_no_instructions(tmp_workspace, monkeypatch):
+    """A pack skipped for a namespace collision has no tools, so it must not
+    contribute a contract describing tools the agent cannot reach."""
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    first = dict(base)
+    second = dict(base)  # identical base_domain -> collides with the first
+    p1 = tmp_workspace / "first.json"
+    p2 = tmp_workspace / "second.json"
+    p1.write_text(json.dumps(first))
+    p2.write_text(json.dumps(second))
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", f"{p1},{p2}")
+    server = create_unified_server()
+    assert server.unified_skipped
+    instructions = server.instructions or ""
+    assert instructions.count(_CONTRACT_MARKER) == 1
+
+
+def _synthetic_packs(workspace: Path, count: int) -> list[str]:
+    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    paths = []
+    for index in range(count):
+        pack = dict(base)
+        pack["base_domain"] = f"pack{index}.example.test"
+        target = workspace / f"pack{index}.json"
+        target.write_text(json.dumps(pack))
+        paths.append(str(target))
+    return paths
+
+
+async def test_instructions_length_is_bounded_with_twelve_packs(tmp_workspace, monkeypatch):
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(_synthetic_packs(tmp_workspace, 12)))
+    server = create_unified_server()
+    assert len(server.unified_namespaces) == 12
+    instructions = server.instructions or ""
+    assert len(instructions) <= _MAX_INSTRUCTIONS_CHARS
+    # Twelve identical contracts de-duplicate to one block, not twelve.
+    assert instructions.count(_CONTRACT_MARKER) == 1
+
+
+async def test_instructions_are_identical_regardless_of_enumeration_order(
+    tmp_workspace, monkeypatch
+):
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    paths = _synthetic_packs(tmp_workspace, 12)
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(paths))
+    forward = create_unified_server().instructions
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(reversed(paths)))
+    backward = create_unified_server().instructions
+    assert forward == backward

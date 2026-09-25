@@ -188,6 +188,38 @@ class _Observable(Protocol):
     unified_skipped: list[tuple[str, str]]
 
 
+_MAX_INSTRUCTIONS_CHARS = 4096
+
+
+def _compose_instructions(mapping: str | None, contracts: list[str]) -> str | None:
+    """Fold every mounted pack's operational contract into the parent's instructions.
+
+    ``mount()`` does not propagate a mounted server's instructions, so without this
+    an agent connecting to the unified server never learns the typed packs'
+    ``UPSTREAM_AUTH_EXPIRED`` contract and will re-run failed mutations by hand.
+
+    Only *mounted* packs contribute. A pack skipped for a namespace collision has no
+    tools on the wire, so its contract would describe behaviour the agent cannot
+    reach. Distinct bodies are sorted so the result is byte-identical across restarts
+    that enumerate the same packs in a different filesystem order, which keeps the
+    prompt cache warm.
+
+    Every pack currently ships the same contract, so de-duplication normally
+    collapses the whole set to one block. The length cap is a backstop for packs
+    that genuinely differ, and it cuts on a paragraph boundary rather than mid
+    sentence.
+    """
+    parts = [part for part in (mapping, *sorted(set(contracts))) if part]
+    if not parts:
+        return None
+    composed = "\n\n".join(parts)
+    if len(composed) <= _MAX_INSTRUCTIONS_CHARS:
+        return composed
+    return composed[:_MAX_INSTRUCTIONS_CHARS].rsplit("\n\n", 1)[0].rstrip() + (
+        "\n\n[per-pack contracts truncated]"
+    )
+
+
 def _build_typed_server(toolpack_path: Path) -> FastMCP:
     """Construct a typed toolpack FastMCP for ``toolpack_path``, honoring
     every ``ASTROLABE_*`` env knob the operator may have set.
@@ -258,6 +290,7 @@ def create_unified_server() -> FastMCP:
     mounted_namespaces: set[str] = set()
     mounted = 0
     skipped: list[tuple[str, str]] = []
+    contracts: list[str] = []
 
     for pack_path in _collect_toolpack_paths():
         try:
@@ -288,6 +321,10 @@ def create_unified_server() -> FastMCP:
 
         mounted_namespaces.add(namespace_token)
         mounted += 1
+        if typed.instructions:
+            contracts.append(typed.instructions)
+
+    server.instructions = _compose_instructions(server.instructions, contracts)
 
     if skipped:
         # Single concise line; tooling can grep. Avoids spamming the wire if
