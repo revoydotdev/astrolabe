@@ -102,6 +102,19 @@ def _refusals(tool):
     return wrapped
 
 
+def _session_stem(handle: str) -> str:
+    """Filesystem stem for a session handle.
+
+    The handle is never used as a filename. A resolved session path is passed on the
+    command line, and any local user can read a running process's argv through ps, so a
+    handle embedded in a path would be a world-readable bearer token for the life of the
+    run. Hashing keeps the mapping server-side: the path on disk is useless without the
+    handle, and the handle itself never leaves this process except as an opaque tool
+    argument.
+    """
+    return hashlib.sha256(handle.encode()).hexdigest()[:32]
+
+
 def create_server(
     workspace: Path | None = None,
     *,
@@ -179,6 +192,34 @@ def create_server(
         if not path.resolve().is_relative_to(root):
             raise ValueError("cookie file must be inside the configured workspace")
         return path.resolve()
+
+    def resolve_session(handle: str, *, host: str) -> Path:
+        """Resolve a session handle to its private cookie file for this host.
+
+        Containment does the work rather than string matching: the handle is hashed
+        into a stem, so any input at all -- including a path-like one -- lands inside
+        the sessions directory, where credential() refuses anything that is not an
+        existing private regular file. The stored domain is checked too, so a session
+        registered for one site cannot be spent against another.
+        """
+        stem = _session_stem(handle)
+        try:
+            resolved = credential(str(Path(".astrolabe") / "sessions" / f"{stem}.json"))
+        except ValueError as exc:
+            raise ValueError(
+                f"unknown or unusable session handle ({exc}); register one with "
+                "register_session and pass the handle it returns"
+            ) from exc
+        meta_path = resolved.with_suffix(".meta.json")
+        try:
+            meta = json.loads(meta_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"session metadata is unreadable ({exc})") from exc
+        if str(meta.get("domain") or "") != host:
+            raise ValueError(
+                "session was registered for a different domain; register one for this host"
+            )
+        return resolved
 
     def private_json(folder: str, name: str, value) -> Path:
         target_dir = root / ".astrolabe" / folder
@@ -451,7 +492,15 @@ def create_server(
         # A non-guessable server-minted token: not the domain, not a counter, and not
         # anything the agent could compute. 256 bits of entropy.
         handle = secrets.token_urlsafe(32)
-        private_json("sessions", f"{handle}.json", record)
+        stem = _session_stem(handle)
+        # The CLI reads a Playwright cookie array, so that is what the resolvable file
+        # holds. Registry metadata lives beside it and is never handed to a subprocess.
+        private_json("sessions", f"{stem}.json", cookies or [])
+        private_json(
+            "sessions",
+            f"{stem}.meta.json",
+            {key: value for key, value in record.items() if key != "cookies"},
+        )
         # redact() is deliberately NOT applied to this dict. It matches on key names
         # and blanks any value under one containing "cookie", so it would replace
         # cookie_names -- a field the contract requires -- with "<redacted>". The real
@@ -543,6 +592,7 @@ def create_server(
         timeout_seconds: int = 300,
         include_mutations: bool = False,
         read_pattern: str | None = None,
+        session: str | None = None,
     ) -> dict:
         """Capture with a browser, drive optional page actions, and generate a Chart.
 
@@ -568,9 +618,15 @@ def create_server(
                 "domain is required; pass the exact host you are authorized to test, e.g. example.com"
             )
         host = normalize_host(domain)
-        sources = [item for item in (cookies_file, browser, cdp_endpoint) if item is not None]
+        sources = [
+            item
+            for item in (cookies_file, browser, cdp_endpoint, session)
+            if item is not None
+        ]
         if len(sources) > 1:
-            raise ValueError("choose at most one of cookies_file, browser, or cdp_endpoint")
+            raise ValueError(
+                "choose at most one of cookies_file, browser, cdp_endpoint, or session"
+            )
         if browser is not None:
             if host not in browser_domains:
                 raise ValueError(
@@ -606,7 +662,11 @@ def create_server(
         if not 60 <= timeout_seconds <= 900:
             raise ValueError("timeout_seconds must be between 60 and 900")
         urls = seed_urls(host, seeds)
-        credentials = credential(cookies_file) if cookies_file is not None else None
+        credentials: Path | None
+        if session is not None:
+            credentials = resolve_session(session, host=host)
+        else:
+            credentials = credential(cookies_file) if cookies_file is not None else None
         destination = directory(f"chart-{host}-{uuid4().hex[:12]}")
         generation = generation_arguments(destination, include_mutations, read_pattern)
         recipe = recipe_for(actions)
@@ -716,9 +776,11 @@ def create_server(
         actions: list[dict] | None = None,
         cookies_file: str | None = None,
         browser: str | None = None,
+        cdp_endpoint: str | None = None,
         profile: str = "Default",
         timeout_seconds: int = 300,
         read_pattern: str | None = None,
+        session: str | None = None,
     ) -> dict:
         """Re-execute a Chart's read operations in a warm browser and regenerate it.
 
@@ -736,8 +798,15 @@ def create_server(
             host = normalize_host(json.loads((path / "endpoints.json").read_text())["base_domain"])
         except (OSError, ValueError, KeyError) as exc:
             raise ValueError("capture directory has no endpoints.json base_domain") from exc
-        if cookies_file is not None and browser is not None:
-            raise ValueError("choose at most one of cookies_file or browser")
+        sources = [
+            item
+            for item in (cookies_file, browser, cdp_endpoint, session)
+            if item is not None
+        ]
+        if len(sources) > 1:
+            raise ValueError(
+                "choose at most one of cookies_file, browser, cdp_endpoint, or session"
+            )
         if browser is not None and host not in browser_domains:
             raise ValueError(
                 "native browser import is disabled for this domain; operator opt-in required"
@@ -745,7 +814,11 @@ def create_server(
         if not 60 <= timeout_seconds <= 900:
             raise ValueError("timeout_seconds must be between 60 and 900")
         urls = seed_urls(host, seeds)
-        credentials = credential(cookies_file) if cookies_file is not None else None
+        credentials: Path | None
+        if session is not None:
+            credentials = resolve_session(session, host=host)
+        else:
+            credentials = credential(cookies_file) if cookies_file is not None else None
         generation = generation_arguments(path, False, read_pattern)
         recipe = recipe_for(actions)
         args = [

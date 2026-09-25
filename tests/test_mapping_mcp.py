@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import stat
 from pathlib import Path
 
@@ -480,10 +481,20 @@ async def test_register_session_handle_is_unguessable_and_not_derivable(tmp_path
 
 @pytest.mark.asyncio
 async def test_register_session_stores_a_private_file(tmp_path):
+    """The stored file is named by a hash of the handle, never by the handle itself.
+
+    A resolved session path is passed on the command line, where any local user can
+    read it through ps. A handle in a filename would therefore be a world-readable
+    bearer token for the life of the run.
+    """
+    from astrolabe.mapping_mcp import _session_stem
+
     server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
     response = await _register(server)
-    stored = tmp_path / ".astrolabe" / "sessions" / f"{response['handle']}.json"
+    stem = _session_stem(response["handle"])
+    stored = tmp_path / ".astrolabe" / "sessions" / f"{stem}.json"
     assert stored.is_file()
+    assert response["handle"] not in stored.name
     assert stat.S_IMODE(stored.stat().st_mode) == 0o600
     assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
     # The file must actually hold the value: a store that silently dropped it would
@@ -543,3 +554,141 @@ async def test_register_session_label_is_length_and_charset_constrained(tmp_path
     with pytest.raises(ToolError, match="label must be"):
         await _register(server, label="x" * 65)
     assert (await _register(server, label="checkout run 1"))["ok"] is True
+
+
+# ----- session handles: resolution, exclusion, and never on the command line ---
+
+# map_site names its destination chart-<host>-<12 hex>; that suffix is per-call.
+_CHART_DIR = re.compile(r"chart-[A-Za-z0-9._-]+-[0-9a-f]{12}")
+
+
+def _argv_capture(monkeypatch, result: bytes = b'{"ok":true}'):
+    """Capture the argv each subprocess would have been given."""
+    calls: list[tuple] = []
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            return result, b""
+
+    async def subprocess(*args, **kwargs):
+        calls.append(args)
+        return Process()
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_map_site_uses_a_session_handle_without_putting_it_on_argv(tmp_path, monkeypatch):
+    """The handle must never reach argv: any local user can read a process's argv
+    through ps, so a handle there is a world-readable bearer token for the run."""
+    from astrolabe.mapping_mcp import _session_stem
+
+    gated = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    response = await _register(gated)
+    handle = response["handle"]
+    calls = _argv_capture(monkeypatch)
+    async with Client(
+        create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    ) as client:
+        await client.call_tool("map_site", {"domain": "example.com", "session": handle})
+    assert calls, "no subprocess was invoked"
+    argv = [str(part) for part in calls[0]]
+    joined = " ".join(argv)
+    assert handle not in joined, "the session handle reached the command line"
+    # Only the hashed stem appears, and the CLI sees no new concept: a cookies file.
+    stem = _session_stem(handle)
+    assert stem in joined
+    assert "--cookies-file" in argv
+    assert handle not in str(calls)
+
+
+@pytest.mark.asyncio
+async def test_session_argv_matches_a_staged_cookies_file(tmp_path, monkeypatch):
+    """A session-sourced run must build the same argv a staged cookies file does."""
+    staged = tmp_path / "cookies.json"
+    staged.write_text("[]")
+    staged.chmod(0o600)
+    from_session = _argv_capture(monkeypatch)
+    async with Client(
+        create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    ) as client:
+        handle = (
+            await client.call_tool(
+                "register_session",
+                {"domain": "example.com", "cookies": [dict(_SESSION_COOKIE)]},
+            )
+        ).data["handle"]
+        await client.call_tool("map_site", {"domain": "example.com", "session": handle})
+    monkeypatch.undo()
+    from_staged = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        await client.call_tool(
+            "map_site", {"domain": "example.com", "cookies_file": "cookies.json"}
+        )
+
+    def shape(argv):
+        # map_site mints a random destination per call, so the two runs cannot be
+        # byte-identical. What must match is the invocation itself, so the
+        # per-call random chart directory is normalised away and the cookies-file
+        # token is dropped (that is the one thing that legitimately differs).
+        argv = [str(p) for p in argv[0]]
+        argv = [_CHART_DIR.sub("chart-<generated>", token) for token in argv]
+        # Drop the --cookies-file flag AND its argument: that pair is exactly what
+        # legitimately differs between a session-sourced and a staged-file run.
+        out, skipping = [], False
+        for token in argv:
+            if skipping:
+                skipping = False
+                continue
+            if token == "--cookies-file":
+                skipping = True
+                continue
+            out.append(token)
+        return out
+
+    assert shape(from_session) == shape(from_staged)
+
+
+@pytest.mark.asyncio
+async def test_session_with_another_source_is_refused_naming_all_four(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    response = await _register(server)
+    handle = response["handle"]
+    for other in (
+        {"cookies_file": "c.json"},
+        {"browser": "vivaldi"},
+        {"cdp_endpoint": "http://127.0.0.1:9222"},
+    ):
+        async with Client(server) as client:
+            with pytest.raises(ToolError) as excinfo:
+                await client.call_tool(
+                    "map_site", {"domain": "example.com", "session": handle, **other}
+                )
+        message = str(excinfo.value)
+        for source in ("cookies_file", "browser", "cdp_endpoint", "session"):
+            assert source in message
+
+
+@pytest.mark.asyncio
+async def test_unknown_and_path_like_handles_are_refused(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    for bad in ("../../etc/passwd", "not-a-real-handle", "", "a" * 500):
+        async with Client(server) as client:
+            with pytest.raises(ToolError) as excinfo:
+                await client.call_tool("map_site", {"domain": "example.com", "session": bad})
+        assert "register_session" in str(excinfo.value)
+        assert "etc/passwd" not in str(excinfo.value), "the probe path was echoed back"
+
+
+@pytest.mark.asyncio
+async def test_session_registered_for_another_domain_is_refused(tmp_path, monkeypatch):
+    calls = _argv_capture(monkeypatch)
+    server = create_server(tmp_path, session_domains=frozenset({"example.com", "other.test"}))
+    handle = (await _register(server, domain="other.test"))["handle"]
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="different domain"):
+            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
+    assert not calls, "a cross-domain session reached a subprocess"

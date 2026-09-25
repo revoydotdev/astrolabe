@@ -72,7 +72,10 @@ LIST_CHARTS_KEYS = [
 REFUSALS = [
     (
         {"domain": "example.com", "browser": "vivaldi", "cookies_file": "public.json"},
-        "choose at most one of cookies_file, browser, or cdp_endpoint",
+        # Reworded by todo 11: `session` joined the mutual-exclusion set, so the
+        # refusal must now name all four sources rather than three. The refusal is
+        # still authored and unchanged in kind.
+        "choose at most one of cookies_file, browser, cdp_endpoint, or session",
     ),
     (
         {"domain": "example.com", "crawl": 11},
