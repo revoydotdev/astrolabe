@@ -2627,7 +2627,9 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         return matches[0] if len(matches) == 1 else None
 
     @server.tool(
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=True, open_world_hint=False
+        ),
         tags={"discovery", "inventory"},
     )
     async def search_operations(
@@ -2657,7 +2659,9 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         return {"ok": True, "count": len(matches), "operations": matches[:200]}
 
     @server.tool(
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=True, open_world_hint=False
+        ),
         tags={"discovery", "inventory"},
     )
     async def describe_operation(operation_id: str) -> dict[str, Any]:
@@ -2670,7 +2674,9 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         )
 
     @server.tool(
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=True, open_world_hint=False
+        ),
         tags={"discovery", "provenance"},
     )
     async def trace_surface(surface: str) -> dict[str, Any]:
@@ -2703,7 +2709,9 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         }
 
     @server.tool(
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=True, open_world_hint=False
+        ),
         tags={"discovery", "drift"},
     )
     async def diff_contract(operation_id: str | None = None) -> dict[str, Any]:
@@ -2728,7 +2736,9 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         return {"ok": True, "count": len(drifts), "drifts": drifts}
 
     @server.tool(
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=True, open_world_hint=False
+        ),
         tags={"discovery", "coverage"},
     )
     async def coverage_report() -> dict[str, Any]:

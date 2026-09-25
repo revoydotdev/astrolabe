@@ -115,6 +115,7 @@ def create_server(
             except ValueError:
                 continue
         return resolved.name
+
     # Operator configuration, never a tool argument. Empty means disabled.
     browser_domains = frozenset(
         normalize_host(d)
