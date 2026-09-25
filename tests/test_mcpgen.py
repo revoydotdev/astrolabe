@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -1113,3 +1114,112 @@ def test_rest_description_omits_the_raw_path(tmp_path) -> None:
     tool = next(t for t in pack["tools"] if t.get("transport") == "rest")
     assert "/api/v1/items" not in tool["description"]
     assert tool["name"] in tool["description"]
+
+
+# ----- todo 18: --require-active-proof, exercised through the real file -------
+
+
+def _write_active_verification(capture_dir: Path, verified: list[str], *, failed=()) -> Path:
+    """Write the artifact contract_verify produces, in the shape mcpgen reads.
+
+    Every pre-existing require_proof test passed a synthetic dict straight to
+    apply_replay_gate, so no test ever noticed the file was never written.
+    """
+    path = capture_dir / "active-verification.json"
+    # Mirrors contract_verify's record exactly, including the `ok` signal the gate
+    # reads -- a fixture missing it would have reproduced the original defect.
+    records = [
+        {
+            "operation": name,
+            "ok": True,
+            "status": 200,
+            "conforms": True,
+            "actively_executed": True,
+            "schema_validated": True,
+            "verified_at": "2026-09-25T00:00:00+00:00",
+        }
+        for name in verified
+    ] + [
+        {
+            "operation": name,
+            "ok": False,
+            "status": 404,
+            "conforms": False,
+            "actively_executed": True,
+            "error_code": "UPSTREAM_NOT_FOUND",
+            "verified_at": "2026-09-25T00:00:00+00:00",
+        }
+        for name in failed
+    ]
+    path.write_text(json.dumps(records))
+    return path
+
+
+def test_require_active_proof_reads_a_real_artifact_from_disk(tmp_path):
+    """The file path, not a synthetic dict: this is the coverage that was missing."""
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer"],
+        request_media_type="application/graphql+json",
+    )
+    _write_active_verification(tmp_path, ["Viewer"], failed=[])
+    pack = build_pack(str(tmp_path), require_active_proof=True)
+    exposed = [t for t in pack["tools"] if t["exposed"]]
+    assert [t["alias"] for t in exposed] == ["Viewer"]
+    assert exposed[0]["proof_status"] == "verified-active"
+
+
+def test_require_active_proof_demotes_an_operation_that_failed_verification(tmp_path):
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer"],
+        request_media_type="application/graphql+json",
+    )
+    _write_active_verification(tmp_path, [], failed=["Viewer"])
+    pack = build_pack(str(tmp_path), require_active_proof=True)
+    assert [t for t in pack["tools"] if t["exposed"]] == []
+
+
+def test_require_active_proof_refuses_rather_than_emitting_an_empty_pack(tmp_path):
+    """The docs promised "only what it re-executed successfully". Producing a valid-looking
+    pack with nothing in it is how the lie stayed invisible; refusing is the honest answer."""
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer"],
+        request_media_type="application/graphql+json",
+    )
+    with pytest.raises(GenerationError) as excinfo:
+        build_pack(str(tmp_path), require_active_proof=True)
+    message = str(excinfo.value)
+    assert "no active verification" in message
+    assert "contract --execute" in message, "the refusal must name the command to run"
+
+
+def test_without_the_flag_a_missing_artifact_is_not_fatal(tmp_path):
+    """Only the gate that asked for proof should refuse; the default path is unchanged."""
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer"],
+        request_media_type="application/graphql+json",
+    )
+    pack = build_pack(str(tmp_path))
+    assert [t for t in pack["tools"] if t["exposed"]]
+
+
+def test_contract_verify_writes_the_artifact_mcpgen_actually_reads():
+    """The two sides are pinned together, which is the cross-check whose absence let the
+    filename and shape drift apart in the first place."""
+    import inspect
+
+    from astrolabe import contract_verify
+    from astrolabe.mcpgen import load_active_verification
+
+    assert "active-verification.json" in inspect.getsource(contract_verify)
+    reader = inspect.getsource(load_active_verification)
+    assert "active-verification.json" in reader
+    # The reader keys on `operation`; the writer must supply it.
+    assert '"operation"' in inspect.getsource(contract_verify)

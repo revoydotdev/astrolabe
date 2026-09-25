@@ -30,7 +30,9 @@ call it makes, and hands the traffic to a local analysis pipeline:
   toolpack from a capture, so an agent can call the site's own API directly
   instead of scraping HTML. An operation astrolabe re-executed and failed is
   withdrawn rather than shipped as a working tool; `--require-active-proof`
-  exposes only what it re-executed successfully
+  exposes only what it re-executed successfully, reading
+  `active-verification.json` from the capture directory, and refuses to generate
+  at all when that file is absent rather than emitting an empty pack
 - **inventory** — catalogue every operation the client's own compiler output
   declares, not only the ones a walk happened to trigger. A read-only walk
   never fires a delete, so the writes a site supports stay visible without

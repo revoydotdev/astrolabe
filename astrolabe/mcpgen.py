@@ -325,10 +325,16 @@ def load_active_verification(capture_dir: str) -> dict[str, dict[str, Any]]:
         return {}
     if not isinstance(loaded, list):
         return {}
-    results = {}
+    results: dict[str, dict[str, Any]] = {}
     for item in loaded:
-        if isinstance(item, dict) and isinstance(item.get("operation"), str):
-            results[item["operation"]] = item
+        if not isinstance(item, dict) or not isinstance(item.get("operation"), str):
+            continue
+        operation = item["operation"]
+        results[operation] = item
+        # The gate looks the result up by TOOL name, which is the sanitized slug, while
+        # the artifact is keyed by the operation as the target spelled it. Index both so
+        # a real artifact can actually prove something.
+        results.setdefault(tool_name(operation, None), item)
     return results
 
 
@@ -944,10 +950,20 @@ def build_pack(
         proof=load_contract_proof(capture_dir),
     )
     tools += build_rest_tools(inv, rest_returns, noise, include_mutations, taken, read_re)
+    verification = load_active_verification(capture_dir)
+    if require_active_proof and not verification:
+        # Demoting every tool here produced a valid-looking pack with nothing in it,
+        # while the docs promised "only what it re-executed successfully". Refusing
+        # is the honest outcome: the caller asked for a guarantee we cannot make.
+        raise GenerationError(
+            "--require-active-proof was set but no active verification was found. "
+            "Run `astrolabe contract --execute` or verify_chart first, or drop the "
+            "flag to generate the full inventory."
+        )
     requirement = attestation_requirement(inv.get("auth_headers") or {})
     apply_replay_gate(
         tools,
-        load_active_verification(capture_dir),
+        verification,
         require_proof=require_active_proof,
         attestation_reason=requirement.reason if requirement else None,
     )

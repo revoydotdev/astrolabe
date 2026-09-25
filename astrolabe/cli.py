@@ -1094,6 +1094,7 @@ def cmd_mcpgen(a):
         + (["--overrides", a.overrides] if a.overrides else [])
         + (["--noise-pattern", a.noise_pattern] if a.noise_pattern else [])
         + (["--read-pattern", a.read_pattern] if a.read_pattern else [])
+        + (["--require-active-proof"] if a.require_active_proof else [])
     )
     mg.main()
 
@@ -1671,6 +1672,11 @@ def build_parser():
     g.add_argument(
         "--read-pattern",
         help="regex of REST paths to force-classify as reads (e.g. a POST-based search)",
+    )
+    g.add_argument(
+        "--require-active-proof",
+        action="store_true",
+        help="expose only operations astrolabe re-executed successfully",
     )
     g.set_defaults(func=cmd_mcpgen)
 

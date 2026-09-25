@@ -353,6 +353,22 @@ def main():
             page.wait_for_timeout(int(a.delay * 1000))
 
     atomic_write_json(f"{a.outdir}/verify.json", verify)
+    # mcpgen --require-active-proof reads THIS name and a LIST shape keyed by
+    # operation. Until it was written, that read always returned {} and the gate
+    # silently demoted every tool while the docs claimed the opposite.
+    atomic_write_json(
+        f"{a.outdir}/active-verification.json",
+        [
+            {
+                "operation": name,
+                # The gate reads `ok`; `status`/`conforms` alone left every operation
+                # looking unproven even with a real artifact present.
+                "ok": result.get("status") == 200 and bool(result.get("conforms")),
+                **result,
+            }
+            for name, result in verify.items()
+        ],
+    )
     ok = sum(1 for v in verify.values() if v.get("status") == 200 and v.get("conforms"))
     log(f"[verify] {ok}/{len(verify)} ops actively verified -> {a.outdir}/verify.json")
     ctx.close()
