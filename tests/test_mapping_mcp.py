@@ -946,3 +946,113 @@ async def test_scan_to_recipe_refuses_a_directory_without_a_scan(tmp_path):
     async with Client(create_server(tmp_path)) as client:
         with pytest.raises(ToolError, match="no scan.json"):
             await client.call_tool("scan_to_recipe", {"scan_directory": str(empty)})
+
+
+# ----- todo 16: scan provenance and budget legibility ------------------------
+
+
+def _scan_artifact(tmp_path: Path) -> Path:
+    """A scan.json in the shape scan.py writes, with the corpus shape
+    DiscoveryCorpus.to_dict produces: candidates carry per-EVIDENCE source."""
+    out = tmp_path / "scan-artifact"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "scan.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "base_host": "example.com",
+                "discovery": {
+                    "schema_version": 1,
+                    "candidate_count": 1,
+                    "sources": ["bundle-endpoint", "source-map"],
+                    "candidates": [
+                        {
+                            "kind": "endpoint",
+                            "key": "/api/v1/items",
+                            "value": "/api/v1/items",
+                            "confidence": 0.9,
+                            "execution_state": "inventory-only",
+                            "evidence": [
+                                {
+                                    "source": "bundle-endpoint",
+                                    "confidence": 0.6,
+                                    "locator": "main.js",
+                                },
+                                {
+                                    "source": "source-map",
+                                    "confidence": 0.9,
+                                    "locator": "main.js.map",
+                                },
+                            ],
+                            "metadata": {},
+                        }
+                    ],
+                },
+                "static_discovery": {
+                    "source_maps": 2,
+                    "cache_hits": 1,
+                    "bytes_downloaded": 4096,
+                    "truncations": ["fetch-error:TimeoutError"],
+                },
+                "target_policy": {
+                    "max_requests": 100,
+                    "max_origin_requests": 50,
+                    "requested_concurrency": 4,
+                },
+            }
+        )
+    )
+    return out
+
+
+@pytest.mark.asyncio
+async def test_scan_site_groups_provenance_by_evidence_source(tmp_path, monkeypatch):
+    """A candidate fuses several evidence items and has no source of its own, so
+    grouping by the candidate would report one 'unknown' bucket and hide provenance."""
+    from astrolabe.mapping_mcp import _scan_accounting
+
+    out = _scan_artifact(tmp_path)
+    sources, _ = _scan_accounting(out)
+    assert set(sources) == {"bundle-endpoint", "source-map"}, sources
+    assert sources["bundle-endpoint"]["findings"] == 1
+    # The weakest evidence per source, not an average and not the fused score.
+    assert sources["bundle-endpoint"]["confidence"] == 0.6
+    assert sources["source-map"]["confidence"] == 0.9
+    assert "unknown" not in sources
+
+
+@pytest.mark.asyncio
+async def test_scan_budget_accounting_matches_the_artifact(tmp_path, monkeypatch):
+    from astrolabe.mapping_mcp import _scan_accounting
+
+    out = _scan_artifact(tmp_path)
+    _, budget = _scan_accounting(out)
+    artifact = json.loads((out / "scan.json").read_text())
+    assert budget["fetched_bytes"] == artifact["static_discovery"]["bytes_downloaded"]
+    assert budget["cache_hits"] == artifact["static_discovery"]["cache_hits"]
+    assert budget["max_requests"] == artifact["target_policy"]["max_requests"]
+    assert budget["max_origin_requests"] == artifact["target_policy"]["max_origin_requests"]
+
+
+@pytest.mark.asyncio
+async def test_scan_budget_reports_truncation_rather_than_a_silent_partial(tmp_path):
+    """A partial scan must say so, with the reasons."""
+    from astrolabe.mapping_mcp import _scan_accounting
+
+    out = _scan_artifact(tmp_path)
+    _, budget = _scan_accounting(out)
+    assert budget["truncated"] is True
+    assert budget["reasons"] == ["fetch-error:TimeoutError"]
+    assert budget["skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_accounting_is_empty_not_invented_when_there_is_no_artifact(tmp_path):
+    """A missing or unreadable scan.json must not produce fabricated provenance."""
+    from astrolabe.mapping_mcp import _scan_accounting
+
+    assert _scan_accounting(tmp_path / "nothing-here") == ({}, {})
+    junk = tmp_path / "junk"
+    junk.mkdir()
+    (junk / "scan.json").write_text("{not json")
+    assert _scan_accounting(junk) == ({}, {})

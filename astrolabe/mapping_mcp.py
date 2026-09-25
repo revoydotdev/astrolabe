@@ -155,6 +155,50 @@ def _session_stem(handle: str) -> str:
     return hashlib.sha256(handle.encode()).hexdigest()[:32]
 
 
+def _scan_accounting(out: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Provenance by evidence source, plus budget accounting, read from scan.json.
+
+    Grouping comes from the discovery corpus, which already carries a source and a
+    0-1 confidence per piece of evidence (discovery.py). Restating them here would
+    create a second source of truth that could disagree with the artifact.
+    """
+    try:
+        artifact = json.loads((out / "scan.json").read_text())
+    except (OSError, ValueError):
+        return {}, {}
+
+    # A candidate has no source of its own: it fuses several evidence items, and
+    # the source lives on each of those. Grouping by the candidate would report a
+    # single "unknown" bucket and hide the provenance entirely.
+    grouped: dict[str, dict[str, Any]] = {}
+    for candidate in (artifact.get("discovery") or {}).get("candidates") or []:
+        for evidence in candidate.get("evidence") or []:
+            source = str(evidence.get("source") or "unknown")
+            bucket = grouped.setdefault(source, {"findings": 0, "confidence": None})
+            bucket["findings"] += 1
+            score = evidence.get("confidence")
+            if isinstance(score, (int, float)):
+                # The weakest finding per source, not an average: an agent judging
+                # completeness needs the floor.
+                bucket["confidence"] = (
+                    score if bucket["confidence"] is None else min(bucket["confidence"], score)
+                )
+
+    static = artifact.get("static_discovery") or {}
+    truncations = list(static.get("truncations") or [])
+    policy = artifact.get("target_policy") or {}
+    budget = {
+        "fetched_bytes": static.get("bytes_downloaded"),
+        "cache_hits": static.get("cache_hits"),
+        "skipped": len(truncations),
+        "reasons": truncations[:20],
+        "max_requests": policy.get("max_requests"),
+        "max_origin_requests": policy.get("max_origin_requests"),
+        "truncated": bool(truncations),
+    }
+    return dict(sorted(grouped.items())), budget
+
+
 def create_server(
     workspace: Path | None = None,
     *,
@@ -703,6 +747,7 @@ def create_server(
             "a Chart, contract or toolpack - no request was replayed",
             "a finished recipe: every proposed step still needs review before use",
         ]
+        result["sources"], result["budget"] = _scan_accounting(destination)
         # A scan is a point-in-time scaffold, not a live view: the recipe reflects
         # the site as it was when this ran. The artifact carries no timestamp of its
         # own, so the tool stamps when it launched rather than implying freshness.
