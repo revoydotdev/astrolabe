@@ -891,14 +891,16 @@ async def test_graph_discovery_tools_are_safe_and_include_graph_only_operations(
     assert traced.structured_content["surface"]["url"] == "https://example.com/app"
     assert "CANARY" not in json.dumps(traced.structured_content)
     assert coverage.structured_content["inventory_count"] == 3
-    assert coverage.structured_content["recommended_next_actions"] == [
-        {
-            "action": "navigation",
-            "surface_id": surface_id,
-            "surface": "https://example.com/app",
-            "reason": "prior interaction produced no attributable backend evidence",
-        }
-    ]
+    actions = coverage.structured_content["recommended_next_actions"]
+    assert {
+        "action": "navigation",
+        "surface_id": surface_id,
+        "surface": "https://example.com/app",
+        "reason": "prior interaction produced no attributable backend evidence",
+    } in actions
+    # Checked across every recommendation, not just the one asserted above: todo 9
+    # added more entries, and each one is another place a surface detail could leak.
+    assert "CANARY" not in json.dumps(actions)
     assert rejected.structured_content["error_code"] == "OPERATION_NOT_INVOCABLE"
 
 
@@ -2788,3 +2790,70 @@ async def test_refusals_carry_a_next_action_when_one_applies(tmp_path, pack):
     assert _as_dict(unknown)["error_code"] == "OPERATION_NOT_FOUND"
     for result in (omitted, unknown):
         assert "search_operations" in _as_dict(result)["next_action"]
+
+
+# ----- todo 9: structural vs effective invocability --------------------------
+
+
+def _coverage_server(tmp_path: Path, pack: dict[str, Any], *, anonymous: bool):
+    pack_path = tmp_path / "pack.json"
+    pack_path.write_text(json.dumps(pack))
+    return create_server(Settings(pack_path, allow_anonymous=anonymous, retries=1))
+
+
+@pytest.mark.asyncio
+async def test_coverage_report_exposes_why_an_exposed_operation_cannot_run(tmp_path, pack):
+    """An exposed operation with no credential is invocable but not callable.
+
+    Reporting only invocable_count is what let github.com advertise 1 while every
+    call returned NO_BEARER.
+    """
+    server = _coverage_server(tmp_path, pack, anonymous=False)
+    async with Client(server) as client:
+        report = _as_dict(await client.call_tool("coverage_report", {}))
+    assert report["invocable_count"] >= 1, "fixture must expose something"
+    assert report["callable_now"] == 0
+    assert report["blocked_no_credential"] == report["direct_tool_count"]
+    assert report["credential_source"]["configured"] is False
+    assert report["credential_source"]["alias_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_coverage_report_recommends_a_concrete_next_step(tmp_path, pack):
+    """An empty list reads as 'nothing to do', which is the misleading success
+    this todo exists to remove."""
+    server = _coverage_server(tmp_path, pack, anonymous=False)
+    async with Client(server) as client:
+        report = _as_dict(await client.call_tool("coverage_report", {}))
+    actions = report["recommended_next_actions"]
+    assert actions, "a chart with a real gap returned no next step"
+    assert all("reason" in action and "action" in action for action in actions)
+    # The named tool is register_session, which todo 10 introduces; the guidance is
+    # correct ahead of the tool existing, and todo 10 is what makes it callable.
+    assert any(action.get("tool") == "register_session" for action in actions)
+
+
+@pytest.mark.asyncio
+async def test_coverage_report_omits_categories_that_are_not_blocked(tmp_path, pack):
+    """An absent key means zero.
+
+    Running anonymously clears the credential category, so blocked_no_credential is
+    omitted entirely. The mutation category is deliberately still reported: this
+    fixture contains a write operation, and the operator's write opt-in is what gates
+    it, so reporting zero there would be the false kind of omission.
+    """
+    server = _coverage_server(tmp_path, pack, anonymous=True)
+    async with Client(server) as client:
+        report = _as_dict(await client.call_tool("coverage_report", {}))
+    assert report["callable_now"] == report["direct_tool_count"]
+    assert "blocked_no_credential" not in report
+    assert report["blocked_mutation_gated"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_coverage_report_never_reports_an_empty_action_list(tmp_path, pack):
+    """When there is genuinely nothing to do the key is absent, not []."""
+    server = _coverage_server(tmp_path, pack, anonymous=True)
+    async with Client(server) as client:
+        report = _as_dict(await client.call_tool("coverage_report", {}))
+    assert report.get("recommended_next_actions") != []

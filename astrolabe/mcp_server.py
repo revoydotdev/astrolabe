@@ -2900,15 +2900,28 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
             inventory_count={"type": "integer"},
             direct_tool_count={"type": "integer"},
             invocable_count={"type": "integer"},
+            callable_now={"type": "integer", "description": "exposed AND has a credential"},
             disabled_count={"type": "integer"},
+            blocked_no_credential={"type": "integer", "description": "absent when zero"},
+            blocked_mutation_gated={"type": "integer", "description": "absent when zero"},
             by_protocol={"type": "object"},
             by_freshness={"type": "object"},
             by_proof_tier={"type": "object"},
-            recommended_next_actions={"type": "array", "items": {"type": "object"}},
+            credential_source={"type": "object"},
+            recommended_next_actions={
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "omitted entirely when there is nothing actionable",
+            },
         ),
     )
     async def coverage_report() -> dict[str, Any]:
-        """Summarize executable, stale, disabled, protocol, and proof coverage."""
+        """Summarize executable, stale, disabled, protocol, and proof coverage.
+
+        Separates what is *structurally* invocable from what is *effectively* callable.
+        An operation can be exposed and still refuse with NO_BEARER because no scoped
+        credential exists for its alias, and an agent cannot see that from a count.
+        """
 
         def counts(field: str) -> dict[str, int]:
             values: dict[str, int] = {}
@@ -2917,7 +2930,67 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
                 values[key] = values.get(key, 0) + 1
             return dict(sorted(values.items()))
 
-        recommendations = []
+        # Effective invocability, decided against the credential source in use rather
+        # than against the pack. This mirrors the check Runtime.execute makes, so the
+        # count cannot disagree with what a call would actually do.
+        auth = runtime.load_auth()
+        available = {str(key) for key in auth}
+        anonymous = settings.allow_anonymous
+        callable_now = 0
+        blocked_no_credential = 0
+        for tool in exposed:
+            if anonymous or str(tool.get("alias") or tool.get("name")) in available:
+                callable_now += 1
+            else:
+                blocked_no_credential += 1
+        blocked_mutation_gated = sum(
+            1
+            for item in inventory
+            if item.get("semantic_kind") == SemanticKind.MUTATION.value
+            and not item.get("invocable")
+        )
+        status = runtime.auth_status()
+
+        recommendations: list[dict[str, Any]] = []
+        if blocked_no_credential:
+            recommendations.append(
+                {
+                    "action": "supply_credentials",
+                    "tool": "register_session",
+                    "reason": (
+                        f"{blocked_no_credential} of {len(exposed)} exposed operations have no "
+                        "scoped credential; they will refuse with NO_BEARER until one exists"
+                    ),
+                }
+            )
+        if blocked_mutation_gated:
+            recommendations.append(
+                {
+                    "action": "review_writes",
+                    "tool": "coverage_report",
+                    "reason": (
+                        f"{blocked_mutation_gated} mutation operations are gated behind the "
+                        "operator's write opt-in; exposing them is an operator decision"
+                    ),
+                }
+            )
+        unproven = sum(
+            1
+            for item in inventory
+            if item.get("proof_tier") in {"unverified", "unknown"}
+        )
+        if unproven and callable_now:
+            recommendations.append(
+                {
+                    "action": "earn_proof",
+                    "tool": "verify_operation",
+                    "reason": (
+                        f"{unproven} operations have no active proof; run verify_operation on "
+                        "one you intend to rely on before treating it as working"
+                    ),
+                }
+            )
+
         graph_data = graph or {}
         surfaces = {item.get("id"): item for item in graph_data.get("surfaces", [])}
 
@@ -2951,17 +3024,51 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
                         "reason": "surface has not been exercised",
                     }
                 )
-        return {
+        if not callable_now and inventory:
+            # The headline fact, stated even when a more specific recommendation above
+            # already explains the cause. A count of zero alongside one gated reason
+            # is easy to read as "something else is still available".
+            recommendations.append(
+                {
+                    "action": "nothing_callable",
+                    "tool": "coverage_report",
+                    "reason": (
+                        f"nothing is callable in this chart right now: 0 of "
+                        f"{len(exposed)} exposed operations can run, out of "
+                        f"{len(inventory)} inventoried"
+                    ),
+                }
+            )
+
+        report: dict[str, Any] = {
             "ok": True,
             "inventory_count": len(inventory),
             "direct_tool_count": len(exposed),
             "invocable_count": sum(bool(item.get("invocable")) for item in inventory),
+            "callable_now": callable_now,
             "disabled_count": sum(not item.get("invocable") for item in inventory),
             "by_protocol": counts("protocol"),
             "by_freshness": counts("freshness"),
             "by_proof_tier": counts("proof_tier"),
-            "recommended_next_actions": recommendations[:20],
+            "credential_source": {
+                "configured": bool(status.get("configured")),
+                "readable": bool(status.get("readable")),
+                "alias_count": len(available),
+                "anonymous_allowed": anonymous,
+                "file_mode_secure": status.get("file_mode_secure"),
+            },
         }
+        # A zero category is omitted rather than reported, so an absent key means
+        # "nothing is blocked here" and a present one means "read this".
+        if blocked_no_credential:
+            report["blocked_no_credential"] = blocked_no_credential
+        if blocked_mutation_gated:
+            report["blocked_mutation_gated"] = blocked_mutation_gated
+        # Never emit an empty list: that reads as "nothing to do" and is exactly the
+        # misleading success this tool exists to remove.
+        if recommendations:
+            report["recommended_next_actions"] = recommendations[:20]
+        return report
 
     @server.tool(tags={"execution", "query"}, output_schema=_discovery_schema())
     async def invoke_query(operation_id: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
