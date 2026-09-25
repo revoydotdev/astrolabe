@@ -240,7 +240,6 @@ def _envelope(result: Any) -> dict[str, Any]:
     return {"ok": False, "error_code": "BAD_RESULT", "error_detail": "tool returned no envelope"}
 
 
-
 def _compose_instructions(mapping: str | None, contracts: list[str]) -> str | None:
     """Fold every mounted pack's operational contract into the parent's instructions.
 
@@ -504,8 +503,11 @@ def create_unified_server() -> FastMCP:
         own credential scoping and host validation.
         """
         if not operation_id:
-            return _refusal("BAD_ARGUMENTS", "operation_id is required",
-            next_action="call search_tools to list callable operation ids")
+            return _refusal(
+                "BAD_ARGUMENTS",
+                "operation_id is required",
+                next_action="call search_tools to list callable operation ids",
+            )
         record = (await _load_index()).get(operation_id)
         if record is None:
             return _refusal(

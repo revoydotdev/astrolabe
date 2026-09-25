@@ -99,6 +99,8 @@ def _discovery_schema(**fields: Any) -> dict[str, Any]:
     schema = envelope_schema(None)
     schema["properties"].update(fields)
     return schema
+
+
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 _PATH_PARAM = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 # Upstream failure detail is echoed back to the agent so it can act on the real cause,
@@ -2792,8 +2794,11 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         generated tool, so an agent can call it without reading the full manifest.
         """
         if not operation_id:
-            return _failure("BAD_ARGUMENTS", "operation_id is required",
-            next_action="call search_operations to list operation ids")
+            return _failure(
+                "BAD_ARGUMENTS",
+                "operation_id is required",
+                next_action="call search_operations to list operation ids",
+            )
         item = _find_inventory(operation_id)
         return (
             {"ok": True, "operation": _with_input_schema(item)}
@@ -2818,8 +2823,11 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
     async def trace_surface(surface: str | None = None) -> dict[str, Any]:
         """Trace a surface to recorded interactions and evidence IDs."""
         if not surface:
-            return _failure("BAD_ARGUMENTS", "surface is required",
-            next_action="call coverage_report to see the recorded surfaces")
+            return _failure(
+                "BAD_ARGUMENTS",
+                "surface is required",
+                next_action="call coverage_report to see the recorded surfaces",
+            )
         if graph is None:
             return _failure(
                 "GRAPH_UNAVAILABLE",
@@ -2982,9 +2990,7 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
                 }
             )
         unproven = sum(
-            1
-            for item in inventory
-            if item.get("proof_tier") in {"unverified", "unknown"}
+            1 for item in inventory if item.get("proof_tier") in {"unverified", "unknown"}
         )
         if unproven and callable_now:
             recommendations.append(
@@ -3078,11 +3084,16 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         return report
 
     @server.tool(tags={"execution", "query"}, output_schema=_discovery_schema())
-    async def invoke_query(operation_id: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def invoke_query(
+        operation_id: str | None = None, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Invoke an exact, current, provider-approved read operation by stable identifier."""
         if not operation_id:
-            return _failure("BAD_ARGUMENTS", "operation_id is required",
-            next_action="call search_operations to list operation ids")
+            return _failure(
+                "BAD_ARGUMENTS",
+                "operation_id is required",
+                next_action="call search_operations to list operation ids",
+            )
         if arguments is None:
             arguments = {}
         tool = _find_executable(operation_id)
@@ -3102,11 +3113,16 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
             proof={"type": "object", "description": "explicit proof metadata"},
         ),
     )
-    async def verify_operation(operation_id: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def verify_operation(
+        operation_id: str | None = None, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Actively verify an approved read operation and return explicit proof metadata."""
         if not operation_id:
-            return _failure("BAD_ARGUMENTS", "operation_id is required",
-            next_action="call search_operations to list operation ids")
+            return _failure(
+                "BAD_ARGUMENTS",
+                "operation_id is required",
+                next_action="call search_operations to list operation ids",
+            )
         if arguments is None:
             arguments = {}
         tool = _find_executable(operation_id)
