@@ -2604,3 +2604,73 @@ def test_declared_operations_accept_pure_inventory(tmp_path, pack):
     ]
     validated = _validate_pack(pack, Settings(tmp_path / "pack.json"))
     assert len(validated["declared_operations"]) == 2
+
+
+# ----- todo 6 baseline: discovery is currently uninformative ------------------
+
+DISCOVERY_TOOLS = [
+    "search_operations",
+    "describe_operation",
+    "trace_surface",
+    "diff_contract",
+    "coverage_report",
+    "invoke_query",
+    "verify_operation",
+    "subscribe_events",
+]
+
+
+def _discovery_server(tmp_path: Path, pack: dict[str, Any]) -> FastMCP:
+    pack_path = tmp_path / "pack.json"
+    pack_path.write_text(json.dumps(pack))
+    return create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+
+
+@pytest.mark.asyncio
+async def test_baseline_discovery_tools_advertise_no_output_schema(tmp_path, pack):
+    """BASELINE: every discovery tool's output schema is an empty shell.
+
+    FastMCP synthesises an outputSchema with zero properties when a tool declares
+    none, so an agent is told nothing about what these calls return. Flipped by the
+    informativeness change.
+    """
+    server = _discovery_server(tmp_path, pack)
+    async with Client(server) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    for name in DISCOVERY_TOOLS:
+        schema = tools[name].output_schema or {}
+        assert not schema.get("properties"), f"{name} unexpectedly advertises properties"
+
+
+@pytest.mark.asyncio
+async def test_baseline_search_and_describe_omit_input_schema(tmp_path, pack):
+    """BASELINE: an agent cannot learn how to call an operation from discovery."""
+    server = _discovery_server(tmp_path, pack)
+    async with Client(server) as client:
+        found = await client.call_tool("search_operations", {})
+        assert "input_schema" not in found.data["operations"][0]
+        described = await client.call_tool(
+            "describe_operation", {"operation_id": found.data["operations"][0]["id"]}
+        )
+        assert "input_schema" not in described.data["operation"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_search_gives_no_truncation_signal(tmp_path, pack):
+    """BASELINE: the 200-item cap is invisible; count reports the pre-cap total."""
+    server = _discovery_server(tmp_path, pack)
+    async with Client(server) as client:
+        found = await client.call_tool("search_operations", {})
+    assert set(found.data) == {"ok", "count", "operations"}
+    assert "truncated" not in found.data and "cursor" not in found.data
+
+
+@pytest.mark.asyncio
+async def test_baseline_trace_surface_without_surfaces_is_graph_unavailable(tmp_path, pack):
+    """The minimal fixture carries no surfaces, so trace_surface cannot reach its
+    SURFACE_NOT_FOUND branch. The claim that branch lists no valid identifiers was
+    verified live against a real pack instead; see .omo/evidence for todo 6."""
+    server = _discovery_server(tmp_path, pack)
+    async with Client(server) as client:
+        result = await client.call_tool("trace_surface", {"surface": "search"})
+    assert result.data["error_code"] == "GRAPH_UNAVAILABLE"
