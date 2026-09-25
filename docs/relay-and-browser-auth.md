@@ -35,6 +35,37 @@ Use a dedicated OS user/browser profile, encrypted swap or disabled swap, and
 short-lived sessions when stronger isolation is needed. A writable source checkout
 is not a security boundary against an agent that can modify it.
 
+## Browser egress policy
+
+A capture browser loads real pages, and real pages pull third-party subresources:
+CDN bundles, analytics beacons, auth widgets, font hosts. Blocking those outright
+breaks many sites, so the default policy `allow-third-party` lets the browser fetch
+them while still never recording their requests — `capture.jsonl` and the contract
+only ever contain first-party traffic. Note the asymmetry, because it is the whole
+point of naming the policy: *allowed* and *recorded* are deliberately different
+things, and "allowed" does not mean "audited".
+
+Set `ASTROLABE_BROWSER_EGRESS=first-party-only` to abort every non-first-party
+request instead, recording each as a truncation with reason `egress-policy`. An
+unrecognized value fails the run before a browser opens, rather than silently
+falling back to the permissive default and reporting a control the run does not
+have. This is operator config only: no tool argument can select or widen the
+policy, mirroring the allowlists above.
+
+Recipe drives are always strict regardless of the operator default, recorded as
+`recipe-egress-policy`, because a driven step is the point at which target-supplied
+content most directly shapes what the browser requests.
+
+`preflight` reports the active policy as `browser_egress_policy`, and each run
+records the value it actually enforced in `meta.json`, so an agent can see the
+control before a capture rather than infer it from a truncation list afterwards.
+
+Attaching to a running browser with `cdp_endpoint` is the sharpest edge of this:
+the capture reuses the operator's live authenticated session, so target-served
+content can steer a browser that already holds real credentials, and the operator's
+own cookies travel with any subresource the page pulls. Use `cookies_file` when the
+capture does not need the live session.
+
 ## Agent-held sessions
 
 `register_session` lets an agent store a session it already holds and spend it

@@ -36,12 +36,14 @@ try:
     from astrolabe.security import (
         atomic_write_json,
         atomic_write_text,
+        egress_policy,
         host_matches,
         is_first_party as _shared_is_first_party,
         request_metadata,
         safe_text,
         safe_url,
         structural_shape,
+        third_party_egress,
         validate_url,
     )
 except ImportError:  # standalone deployment on the capture host
@@ -64,12 +66,14 @@ except ImportError:  # standalone deployment on the capture host
     from security import (  # type: ignore[import-not-found,no-redef]
         atomic_write_json,
         atomic_write_text,
+        egress_policy,
         host_matches,
         is_first_party as _shared_is_first_party,
         request_metadata,
         safe_text,
         safe_url,
         structural_shape,
+        third_party_egress,
         validate_url,
     )
 
@@ -831,6 +835,12 @@ def main(argv=None):
         "rate_limits": {},
     }
     strict_recipe_egress = [False]
+    # Resolved once, up front: a bad operator value must fail the run before a browser
+    # opens, and the run's reported policy must be the one actually enforced.
+    try:
+        egress = egress_policy()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if a.run_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", a.run_id):
         raise SystemExit("--run-id contains unsupported characters")
     run_state = {
@@ -927,12 +937,16 @@ def main(argv=None):
         if rate_stopped(a.rate_stop_dir, origin):
             budget_state["blocked_origins"].add(origin)
         if not _first_party(request.url):
-            if strict_recipe_egress[0]:
+            abort, truncation = third_party_egress(
+                policy=egress,
+                recipe_active=strict_recipe_egress[0],
+            )
+            if abort:
                 budget_state["truncation_count"] += 1
                 if len(budget_state["truncations"]) < 1000:
                     budget_state["truncations"].append(
                         {
-                            "reason": "recipe-egress-policy",
+                            "reason": truncation,
                             "origin": origin,
                             "operation": operation,
                         }
@@ -1547,6 +1561,7 @@ def main(argv=None):
             os.path.join(a.outdir, "meta.json"),
             {
                 "base_domain": base,
+                "egress_policy": egress,
                 "graphql_endpoints": gql_endpoints,
                 "auth_headers": auth_seen,
                 "events": events,

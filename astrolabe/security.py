@@ -165,6 +165,44 @@ def is_first_party(url: str, allowed_host: str, *, allow_subdomains: bool = True
         return False
 
 
+# Browser egress policy: what the capture browser may fetch outside the target's own
+# domain. A real page pulls third-party subresources (CDNs, analytics, auth widgets) and
+# blocking them breaks sites, so allowing them is the default -- but "allowed" used to
+# mean merely unrecorded, with nothing naming the choice. Operator config only: a tool
+# argument must never be able to widen what the browser reaches.
+EGRESS_ALLOW_THIRD_PARTY = "allow-third-party"
+EGRESS_FIRST_PARTY_ONLY = "first-party-only"
+EGRESS_POLICIES = (EGRESS_ALLOW_THIRD_PARTY, EGRESS_FIRST_PARTY_ONLY)
+EGRESS_ENV = "ASTROLABE_BROWSER_EGRESS"
+
+
+def egress_policy() -> str:
+    """The operator's egress policy, or the default when unset.
+
+    An unrecognized value is an error rather than a silent fallback: a typo that quietly
+    left the permissive policy in place would report a control the run does not have.
+    """
+    raw = (os.environ.get(EGRESS_ENV) or "").strip().lower()
+    if not raw:
+        return EGRESS_ALLOW_THIRD_PARTY
+    if raw not in EGRESS_POLICIES:
+        raise ValueError(f"{EGRESS_ENV} must be one of {list(EGRESS_POLICIES)}, not {raw!r}")
+    return raw
+
+
+def third_party_egress(*, policy: str, recipe_active: bool) -> tuple[bool, str | None]:
+    """Decide a request to a non-first-party origin: (abort, truncation reason or None).
+
+    Returns ``abort=False`` for the permissive policy, which still never records the
+    request: allowed and recorded are deliberately different things.
+    """
+    if recipe_active:
+        return True, "recipe-egress-policy"
+    if policy == EGRESS_FIRST_PARTY_ONLY:
+        return True, "egress-policy"
+    return False, None
+
+
 def safe_url(url: str, *, preserve_keys: frozenset[str] = frozenset({"alias"})) -> str:
     """Strip URL credentials, fragments, and query values before persistence/logging."""
     try:

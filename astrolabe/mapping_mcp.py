@@ -942,6 +942,14 @@ def create_server(
         operator opt-in), or cdp_endpoint (attach to a running loopback Chromium and
         reuse its session; operator opt-in).
 
+        cdp_endpoint attaches to a browser you are already logged into, so content the
+        target serves can steer that live session: a page may pull third-party
+        subresources, and the operator's own cookies travel with them. The default
+        egress policy (ASTROLABE_BROWSER_EGRESS) permits those fetches without
+        recording them, because blocking them breaks real pages. Prefer cookies_file
+        when the exposure does not need the live session; call preflight to see the
+        active policy. The policy is operator config and has no argument here.
+
         actions run in order on the last seed page after it loads, each followed by a
         wait for API traffic to settle. Steps: {"action": "search", "selector",
         "value", "submit": bool}, {"action": "click", "selector"}, {"action": "press",

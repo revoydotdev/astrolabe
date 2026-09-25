@@ -22,7 +22,7 @@ from . import contract_store
 from . import profile as prof
 from . import browser as br
 from .artifact import atomic_write_json
-from .security import normalize_host, safe_text, validate_url
+from .security import egress_policy, normalize_host, safe_text, validate_url
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _CLEANUP_STACK: list[list[Callable[[], Any]]] = []
@@ -553,6 +553,11 @@ def preflight(hp, verbose=True):
     info["egress_status"] = (
         "match" if info["egress_match"] else "unavailable" if not li or not hi else "mismatch"
     )
+    # The browser egress policy, so an agent can see what the capture browser is allowed
+    # to reach before it runs a capture rather than inferring it from a truncation list.
+    # Reported as configured, not as enforced: a capture resolves it itself and records
+    # the resolved value in meta.json.
+    info["browser_egress_policy"] = egress_policy()
     if verbose:
         print("── preflight ──────────────────────────────")
         for k in (
@@ -569,6 +574,7 @@ def preflight(hp, verbose=True):
             "egress_host",
             "egress_match",
             "egress_status",
+            "browser_egress_policy",
         ):
             print(f"  {k:14} {info[k]}")
         if not info["egress_match"]:
