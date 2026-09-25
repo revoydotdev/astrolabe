@@ -346,6 +346,32 @@ def create_server(
                 raise ValueError("seed URL cannot contain a comma")
         return urls
 
+    def validate_browser_source(
+        browser: str, profile: str, host: str, actions: list[dict] | None
+    ) -> None:
+        """The one native-browser-import gate, shared by every tool that takes one.
+
+        map_site and verify_chart both forward `browser` and `profile` to the same CLI
+        flags, so two divergent validators would mean the stricter tool teaches the
+        looser one's blind spot to whoever reads it next.
+        """
+        if host not in browser_domains:
+            raise ValueError(
+                "native browser import is disabled for this domain; operator opt-in "
+                "required (ASTROLABE_BROWSER_AUTH_DOMAINS)"
+            )
+        from .browser_cookies import BROWSERS
+
+        if browser not in BROWSERS:
+            raise ValueError(f"browser must be one of {sorted(BROWSERS)}")
+        if not profile or profile in {".", ".."} or "/" in profile or "\\" in profile:
+            raise ValueError("invalid browser profile name")
+        if actions:
+            raise ValueError(
+                "native browser import cannot run actions; use cdp_endpoint or a "
+                "cookies_file for interactive capture"
+            )
+
     async def run(arguments: list[str], timeout: int, label: str) -> dict:
         logs = root / ".astrolabe" / "logs"
         logs.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -940,22 +966,7 @@ def create_server(
                 "choose at most one of cookies_file, browser, cdp_endpoint, or session"
             )
         if browser is not None:
-            if host not in browser_domains:
-                raise ValueError(
-                    "native browser import is disabled for this domain; operator opt-in "
-                    "required (ASTROLABE_BROWSER_AUTH_DOMAINS)"
-                )
-            from .browser_cookies import BROWSERS
-
-            if browser not in BROWSERS:
-                raise ValueError(f"browser must be one of {sorted(BROWSERS)}")
-            if not profile or profile in {".", ".."} or "/" in profile or "\\" in profile:
-                raise ValueError("invalid browser profile name")
-            if actions:
-                raise ValueError(
-                    "native browser import cannot run actions; use cdp_endpoint or a "
-                    "cookies_file for interactive capture"
-                )
+            validate_browser_source(browser, profile, host, actions)
         if cdp_endpoint is not None:
             validate_cdp_endpoint(cdp_endpoint)
             if cdp_endpoint not in attachable:
@@ -1115,10 +1126,8 @@ def create_server(
             raise ValueError(
                 "choose at most one of cookies_file, browser, cdp_endpoint, or session"
             )
-        if browser is not None and host not in browser_domains:
-            raise ValueError(
-                "native browser import is disabled for this domain; operator opt-in required"
-            )
+        if browser is not None:
+            validate_browser_source(browser, profile, host, actions)
         if not 60 <= timeout_seconds <= 900:
             raise ValueError("timeout_seconds must be between 60 and 900")
         urls = seed_urls(host, seeds)

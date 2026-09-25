@@ -14,7 +14,6 @@ from astrolabe.operation import (
 )
 from astrolabe.security import (
     REDACTED,
-    Secret,
     host_matches,
     is_first_party,
     normalize_host,
@@ -27,19 +26,36 @@ from astrolabe.security import (
 )
 
 
-def test_secret_display_and_recursive_redaction() -> None:
-    secret = Secret("canary-credential")
-    assert str(secret) == REDACTED
-    assert repr(secret) == REDACTED
-    assert secret.reveal() == "canary-credential"
-    value = {
-        "nested": [{"Authorization": "Bearer canary-credential"}],
-        "message": "token=canary-credential",
-        "binary": b"canary-credential",
+def test_recursive_redaction_covers_the_shapes_credentials_actually_arrive_in() -> None:
+    """The redaction guarantee, pinned on production shapes.
+
+    A value only survives redaction when it is opaque AND stored under a
+    non-credential key, which no credential path in the package does.
+    """
+    auth_map = {
+        "ViewerSatisfiable": {"authorization": "Bearer canary-credential"},
+        "SearchJobs": {"cookie": "sessionid=canary-credential", "x-csrf-token": "canary"},
     }
-    serialized = json.dumps(redact(value))
+    cookie_jar = [{"name": "sessionid", "value": "canary-credential", "domain": "example.com"}]
+    error = {"message": "upstream rejected token=canary-credential", "raw": b"canary-credential"}
+    serialized = json.dumps(redact({**auth_map, "cookies": cookie_jar, **error}))
     assert "canary-credential" not in serialized
+    # The key survives, so a diagnostic still says which credential shape was involved.
+    assert "authorization" in serialized
     assert "<bytes:" in serialized
+    assert redact({"authorization": "x"})["authorization"] == REDACTED
+
+
+def test_no_unwired_credential_wrapper_in_the_package() -> None:
+    """A safeguard nothing constructs fires on nothing and reads as a guarantee.
+
+    ``Secret`` was deleted rather than wired: its ``str()`` returns ``<redacted>``, so
+    wrapping live credentials would silently corrupt any implicit string use (building
+    a Cookie header) in exchange for protecting a leak no credential path produces.
+    """
+    import astrolabe.security as security
+
+    assert not hasattr(security, "Secret")
 
 
 @pytest.mark.parametrize(

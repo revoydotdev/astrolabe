@@ -382,6 +382,64 @@ async def test_verify_chart_defaults_to_anonymous_and_regenerates(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_both_browser_consuming_tools_refuse_the_same_bad_source(tmp_path, monkeypatch):
+    """map_site and verify_chart forward the same flags, so they must gate them alike.
+
+    A refusal only in the stricter tool teaches the looser one's blind spot to whoever
+    reads it next, so this asserts the two messages are identical, not merely present.
+    """
+    chart = tmp_path / "chart-example.com-1"
+    chart.mkdir()
+    (chart / "endpoints.json").write_text('{"base_domain": "example.com"}')
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("an invalid browser source reached the subprocess")
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", forbidden)
+    for source in (
+        {"browser": "not-a-browser", "profile": "Default"},
+        {"browser": "vivaldi", "profile": "../../etc"},
+        {"browser": "vivaldi", "profile": ""},
+    ):
+        messages = {}
+        for tool, target in (
+            ("map_site", {"domain": "example.com"}),
+            ("verify_chart", {"capture_directory": chart.name}),
+        ):
+            server = create_server(tmp_path, browser_auth_domains=frozenset({"example.com"}))
+            async with Client(server) as client:
+                with pytest.raises(ToolError) as excinfo:
+                    await client.call_tool(tool, {**target, **source})
+            messages[tool] = str(excinfo.value)
+        assert messages["map_site"] == messages["verify_chart"], source
+        assert (
+            "browser profile name" in messages["map_site"]
+            or "must be one of" in (messages["map_site"])
+        )
+
+
+@pytest.mark.asyncio
+async def test_browser_import_is_refused_at_the_mcp_layer_for_both_tools(tmp_path, monkeypatch):
+    """The operator allowlist is enforced where the tool is called, not downstream."""
+    chart = tmp_path / "chart-example.com-1"
+    chart.mkdir()
+    (chart / "endpoints.json").write_text('{"base_domain": "example.com"}')
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("an unauthorized browser import reached the subprocess")
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", forbidden)
+    for tool, extra in (
+        ("map_site", {"domain": "example.com"}),
+        ("verify_chart", {"capture_directory": chart.name}),
+    ):
+        server = create_server(tmp_path, browser_auth_domains=frozenset({"other.com"}))
+        async with Client(server) as client:
+            with pytest.raises(ToolError, match="ASTROLABE_BROWSER_AUTH_DOMAINS"):
+                await client.call_tool(tool, {**extra, "browser": "vivaldi", "profile": "Default"})
+
+
+@pytest.mark.asyncio
 async def test_import_har_runs_the_real_pipeline_into_a_chart(tmp_path):
     """No subprocess double: the MCP tool drives the real CLI on the HAR fixture."""
     fixture = Path(__file__).parent / "fixtures" / "sample.har.json"

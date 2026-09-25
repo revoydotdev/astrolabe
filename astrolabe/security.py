@@ -39,34 +39,11 @@ _CANARY_VALUE = re.compile(
 DENIED_HEADERS = frozenset({"connection", "content-length", "cookie", "host", "transfer-encoding"})
 
 
-class Secret(str):
-    """A secret value whose display forms are always redacted.
-
-    ``reveal`` is intentionally explicit; ordinary formatting, repr, and str never
-    expose the underlying value.
-    """
-
-    _secret_value: str
-
-    def __new__(cls, value: str) -> Secret:
-        obj = super().__new__(cls, REDACTED)
-        obj._secret_value = value
-        return obj
-
-    def __repr__(self) -> str:
-        return REDACTED
-
-    def reveal(self) -> str:
-        return self._secret_value
-
-
 def redact(value: Any, *, key: str | None = None, depth: int = 0) -> Any:
     """Recursively remove likely credentials before diagnostic serialization."""
     if depth > 12:
         return "<truncated>"
     if key and _SENSITIVE_KEY.search(key):
-        return REDACTED
-    if isinstance(value, Secret):
         return REDACTED
     if isinstance(value, Mapping):
         return {str(k): redact(v, key=str(k), depth=depth + 1) for k, v in value.items()}
