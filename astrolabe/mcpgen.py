@@ -33,6 +33,7 @@ from .ir import evidence_records_from_graph, inventory_from_graph, load_graph, s
 from .media import is_api_media
 from .operation import Protocol, SemanticKind, graphql_protocol, semantic_kind
 from .graphql_doc import parse_graphql_document
+from .gqlvars import parse_variable_definitions
 from .shapemerge import coerce_to_schema, merge_json_schemas, merge_shapes
 
 TOOLPACK_VERSION = 2
@@ -54,6 +55,31 @@ DEFAULT_NOISE = re.compile(
 
 # Path placeholders analyze.path_tmpl emits when it templatises a REST path.
 PATH_PARAM = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _unsatisfiable_required(schema: dict[str, Any], needed: list[str]) -> list[str]:
+    """Arguments the request needs that this tool's schema cannot accept.
+
+    A tool missing one of these ships looking callable and then fails at the upstream
+    server, which is where an agent discovers it at runtime instead of here.
+    """
+    properties = schema.get("properties") or {}
+    return [name for name in needed if name not in properties]
+
+
+def _required_query_variables(query: str) -> list[str]:
+    """GraphQL variables that must be supplied: non-null with no default.
+
+    A non-null variable *with* a default is deliberately excluded -- the caller may
+    omit it, so gating on it would over-constrain a perfectly callable tool.
+    """
+    if not query:
+        return []
+    try:
+        definitions = parse_variable_definitions(query)
+    except Exception:  # noqa: BLE001 - a query we cannot parse tells us nothing here
+        return []
+    return sorted(name for name, var in definitions.items() if var.required)
 
 TYPEMAP = {"str": "string", "int": "integer", "bool": "boolean", "float": "number"}
 
@@ -497,6 +523,9 @@ def build_graphql_tools(
         # including ones no capture ever exercised.
         if schema_index:
             in_schema = schema_index.enrich(in_schema)
+        # Computed once the schema is final, so enrichment cannot add a property the
+        # query then turns out to require.
+        unsatisfiable = _unsatisfiable_required(in_schema, _required_query_variables(q))
 
         reason = None
         document_evidence = (meta.get("request_template") or {}).get("document_evidence")
@@ -528,6 +557,8 @@ def build_graphql_tools(
             reason = f"{protocol} has no reviewed exact execution adapter"
         elif noise.search(alias):
             reason = "telemetry / UI-chrome (not a data op)"
+        elif unsatisfiable:
+            reason = f"unsatisfiable_required_input: {', '.join(unsatisfiable)}"
 
         status = None if meta.get("protocol_source") else proof.get(alias)
         proof_note = f" Proof: {status}." if status else ""
@@ -713,6 +744,10 @@ def build_rest_tools(
             for item in response_variants
             if item.get("success") and item.get("media_type")
         }
+        # A path placeholder the schema cannot accept is the REST equivalent of an
+        # unbindable GraphQL variable. The derived-schema branch above always adds these,
+        # so only a supplied spec (OpenAPI) can omit one.
+        unsatisfiable = _unsatisfiable_required(schema, PATH_PARAM.findall(path))
         reason = None
         lifecycle_status = ep.get("lifecycle_status")
         if lifecycle_status and lifecycle_status != "current":
@@ -738,6 +773,8 @@ def build_rest_tools(
                 "documented success media is not JSON; inventoried until a matching "
                 "MCP content/resource adapter is selected"
             )
+        elif unsatisfiable:
+            reason = f"unsatisfiable_required_input: {', '.join(unsatisfiable)}"
 
         rest_name = _dedupe(rest_tool_name(method, path), taken)
         tools.append(

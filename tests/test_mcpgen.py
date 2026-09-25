@@ -1223,3 +1223,126 @@ def test_contract_verify_writes_the_artifact_mcpgen_actually_reads():
     assert "active-verification.json" in reader
     # The reader keys on `operation`; the writer must supply it.
     assert '"operation"' in inspect.getsource(contract_verify)
+
+
+# ----- todo 20: gate tools whose required inputs cannot be satisfied ----------
+
+
+def _query_capture(
+    tmp_path, *, query: str, input_schema=None, rest=None, graph_input_schema=None
+) -> None:
+    """A capture whose single GraphQL operation uses `query`, with an optional
+    input_schema. Omitting input_schema is the realistic case: analyze.py emits one,
+    but an older inventory does not, and mcpgen then falls back to an empty object."""
+    graph = {
+        "schema_version": 1,
+        "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+        "target": "example.com",
+        "runs": [],
+        "origins": [{"id": "o1", "scheme": "https", "host": "example.com"}],
+        "endpoints": [
+            {"id": "e1", "origin_id": "o1", "path": "/api/graphql", "response_media_types": []}
+        ],
+        "request_templates": [{"id": "t1", "method": "POST", "body_template": {"query": query}}],
+        "operations": [
+            {
+                "id": "op1",
+                "protocol": "graphql-inline",
+                "semantic_kind": "query",
+                "request_template_ids": ["t1"],
+                "endpoint_ids": ["e1"],
+                "aliases": ["Viewer"],
+                "operation_names": ["Viewer"],
+                "input_schema_ids": ["s1"] if graph_input_schema else [],
+                "identifiers": [],
+                "lifecycle": {"observation_count": 1},
+            }
+        ],
+        "evidence": [],
+        "authentication_flows": [],
+        "credential_scopes": [],
+        # inventory_from_graph ALWAYS emits an input_schema key, defaulting to {} when
+        # the graph carries no schema node -- and todo 7's merge only fills ABSENT keys,
+        # so an empty graph value shadows the richer one in endpoints.json. A capture
+        # that really did observe the variable therefore has a schema node here.
+        "schemas": ([{"id": "s1", "document": graph_input_schema}] if graph_input_schema else []),
+        "surfaces": [],
+        "interactions": [],
+        "event_channels": [],
+        "proofs": [],
+        "drifts": [],
+        "rate_policies": [],
+    }
+    operation = {
+        "semantic_kind": "query",
+        "type": "query",
+        "protocol": "graphql-inline",
+        "http_method": "POST",
+        "request_url": "https://example.com/api/graphql",
+        "query": query,
+        "operation": "Viewer",
+        "parse_confidence": "parsed",
+        "request_media_type": "application/graphql+json",
+        "returns": ["viewer"],
+        "directives": [],
+        "root_fields": ["viewer"],
+        "variables": [],
+        "input_shape": None,
+    }
+    if input_schema is not None:
+        operation["input_schema"] = input_schema
+    inventory = {
+        "base_domain": "example.com",
+        "graphql_endpoints": ["/api/graphql"],
+        "auth_headers": {},
+        "graphql_operations": {"Viewer": operation},
+        "rest_endpoints": rest or [],
+    }
+    (tmp_path / "graph.json").write_text(json.dumps(graph))
+    (tmp_path / "endpoints.json").write_text(json.dumps(inventory))
+
+
+def test_non_null_variable_the_schema_cannot_accept_gates_the_tool(tmp_path):
+    """Ships looking callable, then fails at the upstream server at runtime instead."""
+    _query_capture(tmp_path, query="query Viewer($id: ID!) { viewer(id: $id) { id } }")
+    pack = build_pack(str(tmp_path))
+    tool = _only_tool(pack)
+    assert tool["exposed"] is False
+    assert tool["reason"].startswith("unsatisfiable_required_input:")
+    assert "id" in tool["reason"], "the reason must name the specific unbindable variable"
+
+
+def test_a_variable_the_schema_declares_is_not_gated(tmp_path):
+    """The anti-over-gating assertion: a tool that CAN take its argument still ships."""
+    _query_capture(
+        tmp_path,
+        query="query Viewer($id: ID!) { viewer(id: $id) { id } }",
+        input_schema={"type": "object", "properties": {"id": {"type": "string"}}},
+        graph_input_schema={"type": "object", "properties": {"id": {"type": "string"}}},
+    )
+    tool = _only_tool(build_pack(str(tmp_path)))
+    assert tool["exposed"] is True
+    assert "unsatisfiable_required_input" not in (tool.get("reason") or "")
+
+
+def test_a_non_null_variable_with_a_default_is_not_gated(tmp_path):
+    """A default means the caller may omit it, so gating on it would over-constrain."""
+    _query_capture(tmp_path, query='query Viewer($id: ID! = "7") { viewer(id: $id) { id } }')
+    tool = _only_tool(build_pack(str(tmp_path)))
+    assert tool["exposed"] is True
+    assert "unsatisfiable_required_input" not in (tool.get("reason") or "")
+
+
+def test_operation_with_no_variables_is_not_gated(tmp_path):
+    _query_capture(tmp_path, query="query Viewer { viewer { id } }")
+    assert _only_tool(build_pack(str(tmp_path)))["exposed"] is True
+
+
+def test_gated_pack_still_validates(tmp_path):
+    """Gating must not produce a pack the runtime would reject."""
+    from astrolabe.mcp_server import Settings, _validate_pack
+
+    _query_capture(tmp_path, query="query Viewer($id: ID!) { viewer(id: $id) { id } }")
+    pack = build_pack(str(tmp_path))
+    _validate_pack(pack, Settings(tmp_path / "toolpack.json"))
+    assert pack["tools"][0]["exposed"] is False
