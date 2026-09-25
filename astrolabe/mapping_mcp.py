@@ -106,6 +106,42 @@ def _refusals(tool):
     return wrapped
 
 
+# Values taken from a target are only ever used in a selector when they are plain
+# identifier characters. Anything else is skipped rather than escaped: an escape routine
+# is a place to get quoting wrong, and a skipped target costs one candidate while a
+# malformed selector costs a whole capture.
+_TARGET_TOKEN_OK = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _structural_selector(target: dict[str, Any]) -> str | None:
+    """Build a selector for an observed click target from structural evidence alone.
+
+    The scanner collapses four data attributes into one ``hook`` value, so the selector
+    covers all four rather than guessing which one held it.
+
+    Element *text* is never used. It is target-controlled free text, and a selector
+    carrying it would put the target's own words into the step that executes -- the same
+    injection channel todo 17 removed from tool metadata, arriving by another route.
+    Class names are admitted only through the same token check, so they cannot smuggle
+    quoting.
+    """
+    hook = str(target.get("hook") or "")
+    if _TARGET_TOKEN_OK.fullmatch(hook):
+        return ",".join(
+            f'[{name}="{hook}"]' for name in ("data-hook", "data-testid", "data-test", "data-cy")
+        )
+    tag = str(target.get("tag") or "")
+    if not _TARGET_TOKEN_OK.fullmatch(tag):
+        return None
+    role = str(target.get("role") or "")
+    if _TARGET_TOKEN_OK.fullmatch(role):
+        return f'{tag}[role="{role}"]'
+    cls = str(target.get("cls") or "")
+    if _TARGET_TOKEN_OK.fullmatch(cls):
+        return f"{tag}.{cls}"
+    return tag
+
+
 def _session_stem(handle: str) -> str:
     """Filesystem stem for a session handle.
 
@@ -656,11 +692,103 @@ def create_server(
             result = await run(args, 900, "scan")
         result.pop("result", None)
         result["scan_directory"] = str(destination)
+        # Stated outright, because "evidence to review" read as a finished recipe is the
+        # failure this guards: a scan never yields an operation it could execute.
+        result["produces"] = [
+            "a source-scan evidence record (scan.json, scan.md)",
+            "candidate interaction proposals derived from observed evidence",
+        ]
+        result["does_not_produce"] = [
+            "an executable operation of any kind",
+            "a Chart, contract or toolpack - no request was replayed",
+            "a finished recipe: every proposed step still needs review before use",
+        ]
         # A scan is a point-in-time scaffold, not a live view: the recipe reflects
         # the site as it was when this ran. The artifact carries no timestamp of its
         # own, so the tool stamps when it launched rather than implying freshness.
         result["scanned_at"] = scanned_at
         return result
+
+    @server.tool(
+        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
+    )
+    @_refusals
+    async def scan_to_recipe(
+        scan_directory: str | None = None, limit: int = 20
+    ) -> dict:
+        """Turn a scan's evidence into candidate `actions` for map_site.
+
+        A scan observes a site; it never replays a request, so it cannot know which
+        interactions are safe. What it can offer is the interaction targets it actually
+        saw, as a starting point for review.
+
+        Selectors are built only from structural evidence -- a data-hook/data-testid
+        attribute, or an element's tag and ARIA role. Element *text* is deliberately
+        never used: it is attacker-controlled free text, and a selector carrying it
+        would be a prompt-injection channel into the action that runs. Target-supplied
+        text stays labelled untrusted, as the server instructions state.
+
+        Every proposed step carries a safe_annotation, and the whole list is validated
+        with the same parser map_site uses, so a returned list cannot be one map_site
+        would refuse.
+        """
+        if not scan_directory:
+            raise ValueError(
+                "scan_directory is required; it is the scan_directory a scan_site call returned"
+            )
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError("limit must be an integer between 1 and 50")
+        path = directory(scan_directory)
+        evidence_path = path / "scan.json"
+        try:
+            evidence = json.loads(evidence_path.read_text())
+        except FileNotFoundError as exc:
+            raise ValueError("no scan.json in that directory; run scan_site first") from exc
+        except ValueError as exc:
+            raise ValueError("scan.json is not readable JSON") from exc
+
+        actions: list[dict[str, Any]] = []
+        skipped_unusable = 0
+        for url, record in sorted((evidence.get("evidence") or {}).items()):
+            if len(actions) >= limit:
+                break
+            for target in record.get("click_targets") or []:
+                if len(actions) >= limit:
+                    break
+                selector = _structural_selector(target)
+                if not selector:
+                    skipped_unusable += 1
+                    continue
+                actions.append(
+                    {
+                        "action": "click",
+                        "selector": selector,
+                        "optional": True,
+                        "safe_annotation": (
+                            "click target observed by source-scan; not verified as safe "
+                            "or read-only, so review before capture"
+                        ),
+                    }
+                )
+
+        # Validated with the same parser map_site runs, so a returned list is one
+        # map_site will accept rather than one it refuses at browser start.
+        parse_declarative_recipe({"schema_version": 1, "actions": actions})
+        return {
+            "ok": True,
+            "scan_directory": str(path),
+            "actions": actions,
+            "skipped_unusable_selectors": skipped_unusable,
+            "selector_source": "structural evidence only (data-hook/data-testid, tag, ARIA role)",
+            "excluded_by_design": [
+                "element text, which is target-controlled free text",
+                "any executable operation: a scan observed a site, it never called one",
+            ],
+            "next_step": (
+                "review each step, then pass actions= to map_site; every step is a "
+                "candidate, not a verified-safe interaction"
+            ),
+        }
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals

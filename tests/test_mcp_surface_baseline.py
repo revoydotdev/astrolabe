@@ -51,6 +51,7 @@ MAPPING_TOOL_NAMES = [
     "register_session",
     "revoke_session",
     "scan_site",
+    "scan_to_recipe",
     "solve_challenge",
     "verify_chart",
 ]
