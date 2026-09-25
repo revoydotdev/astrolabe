@@ -2746,3 +2746,45 @@ async def test_orientation_prompt_no_longer_leads_with_the_manifest(tmp_path, pa
     text = " ".join(m.content.text for m in prompt.messages if m.content.type == "text")
     assert "coverage_report" in text
     assert text.index("coverage_report") < text.index("astrolabe://manifest")
+
+
+# ----- todo 8: no tool leaks a raw validation error ---------------------------
+
+LEAK_MARKERS = ("errors.pydantic.dev", "validation error for call", "Traceback")
+
+
+@pytest.mark.asyncio
+async def test_no_typed_tool_leaks_a_raw_validation_error(tmp_path, pack):
+    """Every typed tool must refuse an omitted argument in its own words.
+
+    The SDK validates a call against the function signature before the body runs, so a
+    required parameter turns any omission into an internal error carrying
+    errors.pydantic.dev. Exercised per-tool because the guards are per-tool.
+    """
+    server = _discovery_server(tmp_path, pack)
+    leaks = []
+    async with Client(server) as client:
+        for tool in await client.list_tools():
+            try:
+                result = await client.call_tool(tool.name, {})
+            except ToolError as exc:
+                text = str(exc)
+            else:
+                text = " ".join(c.text for c in result.content if getattr(c, "type", "") == "text")
+            if any(marker in text for marker in LEAK_MARKERS):
+                leaks.append((tool.name, text[:120]))
+    assert not leaks, f"tools leaking a raw validation error: {leaks}"
+
+
+@pytest.mark.asyncio
+async def test_refusals_carry_a_next_action_when_one_applies(tmp_path, pack):
+    """A refusal that only says what went wrong leaves the caller to guess."""
+    server = _discovery_server(tmp_path, pack)
+    async with Client(server) as client:
+        omitted = await client.call_tool("describe_operation", {})
+        unknown = await client.call_tool("describe_operation", {"operation_id": "nope"})
+    # Two distinct refusals: the argument was absent, versus it named nothing real.
+    assert _as_dict(omitted)["error_code"] == "BAD_ARGUMENTS"
+    assert _as_dict(unknown)["error_code"] == "OPERATION_NOT_FOUND"
+    for result in (omitted, unknown):
+        assert "search_operations" in _as_dict(result)["next_action"]

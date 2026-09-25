@@ -431,13 +431,16 @@ def create_unified_server() -> FastMCP:
             return _refusal("OPERATION_NOT_FOUND", f"tool {name!r} is not registered")
         return _envelope(await tool.run(arguments))
 
-    def _refusal(code: str, detail: str) -> dict[str, Any]:
-        return {
+    def _refusal(code: str, detail: str, *, next_action: str | None = None) -> dict[str, Any]:
+        out: dict[str, Any] = {
             "ok": False,
             "error_code": code,
             "error_detail": detail,
             "retryable": False,
         }
+        if next_action is not None:
+            out["next_action"] = next_action
+        return out
 
     @server.tool(
         annotations=ToolAnnotations(
@@ -493,13 +496,16 @@ def create_unified_server() -> FastMCP:
         ),
     )
     async def call_tool(
-        operation_id: str, arguments: dict[str, Any] | None = None
+        operation_id: str | None = None, arguments: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Invoke one operation by the operation_id search_tools returned.
 
         Reaches the same execution path the per-Chart tool did, including that Chart's
         own credential scoping and host validation.
         """
+        if not operation_id:
+            return _refusal("BAD_ARGUMENTS", "operation_id is required",
+            next_action="call search_tools to list callable operation ids")
         record = (await _load_index()).get(operation_id)
         if record is None:
             return _refusal(

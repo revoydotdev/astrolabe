@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 from astrolabe.mapping_mcp import create_server
 from astrolabe.unified_mcp import (
@@ -633,3 +634,46 @@ async def test_collapsed_surface_excludes_charts_with_nothing_invocable(
         found = await client.call_tool("search_tools", {"limit": 200})
     payload = found.data if isinstance(found.data, dict) else found.structured_content
     assert all(o["operation_id"] for o in payload["operations"])
+
+
+# ----- todo 8: no tool leaks a raw validation error ---------------------------
+
+LEAK_MARKERS = ("errors.pydantic.dev", "validation error for call", "Traceback")
+
+
+async def _every_tool_refusals_are_authored(server) -> list[tuple[str, str]]:
+    """Call every tool with no arguments and return (name, text) for each."""
+    out = []
+    async with Client(server) as client:
+        names = sorted(t.name for t in await client.list_tools())
+        for name in names:
+            try:
+                result = await client.call_tool(name, {})
+            except ToolError as exc:
+                out.append((name, str(exc)))
+                continue
+            out.append((name, " ".join(c.text for c in result.content if c.type == "text")))
+    return out
+
+
+async def test_no_tool_leaks_a_raw_validation_error_on_the_unified_surface(tmp_workspace):
+    """An omitted argument must produce an authored refusal, not a Pydantic traceback.
+
+    The SDK validates a tool call against the function signature before the body runs,
+    so a required parameter turns any omission into an internal error carrying
+    errors.pydantic.dev. Every required parameter is therefore optional with a guard.
+    """
+    leaks = [
+        (name, text)
+        for name, text in await _every_tool_refusals_are_authored(create_unified_server())
+        if any(marker in text for marker in LEAK_MARKERS)
+    ]
+    assert not leaks, f"tools leaking a raw validation error: {leaks}"
+
+
+async def test_missing_arguments_name_the_way_out(tmp_workspace, qualcomm_pack, monkeypatch):
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    refusals = dict(await _every_tool_refusals_are_authored(create_unified_server()))
+    assert "capture_directory is required" in refusals["generate_chart"]
+    assert "list_charts" in refusals["generate_chart"]
+    assert "domain is required" in refusals["map_site"]

@@ -332,7 +332,7 @@ def create_server(
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False))
     @_refusals
     async def generate_chart(
-        capture_directory: str,
+        capture_directory: str | None = None,
         include_mutations: bool = False,
         read_pattern: str | None = None,
     ) -> dict:
@@ -341,6 +341,10 @@ def create_server(
         read_pattern is a regex of REST paths the operator asserts are reads even
         though their method is not (e.g. a POST-based search), so they become tools.
         """
+        if not capture_directory:
+            raise ValueError(
+                "capture_directory is required; call list_charts for the available capture directory names"
+            )
         path = directory(capture_directory)
         result = await run(
             generation_arguments(path, include_mutations, read_pattern), 180, "mcp-gen"
@@ -351,13 +355,17 @@ def create_server(
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals
-    async def solve_challenge(url: str, timeout_seconds: int = 60) -> dict:
+    async def solve_challenge(url: str | None = None, timeout_seconds: int = 60) -> dict:
         """Solve an anti-bot challenge with Byparr and stage its cookies privately.
 
         Returns a workspace cookies_file and the user_agent that solved it; pass both
         to map_site, since clearance cookies only work under the solving agent.
         Cookie values are never returned.
         """
+        if not url:
+            raise ValueError(
+                "url is required; pass the absolute https URL of the page behind the challenge"
+            )
         host = normalize_host(urlsplit(url).hostname or "")
         validate_url(url, {host}, schemes=("https",), resolve=False)
         if not 10 <= timeout_seconds <= 180:
@@ -401,7 +409,7 @@ def create_server(
     )
     @_refusals
     async def map_site(
-        domain: str,
+        domain: str | None = None,
         cookies_file: str | None = None,
         seeds: list[str] | None = None,
         actions: list[dict] | None = None,
@@ -436,6 +444,10 @@ def create_server(
         "timeout_ms" (<=15000). At most five same-site seeds, 50 actions, ten crawled
         links, and max_requests (1-500) first-party requests.
         """
+        if not domain:
+            raise ValueError(
+                "domain is required; pass the exact host you are authorized to test, e.g. example.com"
+            )
         host = normalize_host(domain)
         sources = [item for item in (cookies_file, browser, cdp_endpoint) if item is not None]
         if len(sources) > 1:
@@ -536,8 +548,8 @@ def create_server(
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=False))
     @_refusals
     async def import_har(
-        har_file: str,
-        domain: str,
+        har_file: str | None = None,
+        domain: str | None = None,
         include_mutations: bool = False,
         read_pattern: str | None = None,
     ) -> dict:
@@ -546,6 +558,14 @@ def create_server(
         har_file must be inside the workspace. Only first-party API shapes are kept;
         values never enter the Chart, and its proof is labelled imported, not observed.
         """
+        if not har_file:
+            raise ValueError(
+                "har_file is required; pass a workspace-relative .har path; see the tool description"
+            )
+        if not domain:
+            raise ValueError(
+                "domain is required; see the tool description for the exact host"
+            )
         host = normalize_host(domain)
         source = (root / har_file).resolve()
         if not source.is_relative_to(root) or not source.is_file():
@@ -572,7 +592,7 @@ def create_server(
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals
     async def verify_chart(
-        capture_directory: str,
+        capture_directory: str | None = None,
         seeds: list[str] | None = None,
         actions: list[dict] | None = None,
         cookies_file: str | None = None,
@@ -588,6 +608,10 @@ def create_server(
         replayed once and its response validated against the contract. Writes are
         never replayed. Proven operations become verified-active in contract.json.
         """
+        if not capture_directory:
+            raise ValueError(
+                "capture_directory is required; call list_charts for the available capture directory names"
+            )
         path = directory(capture_directory)
         try:
             host = normalize_host(json.loads((path / "endpoints.json").read_text())["base_domain"])

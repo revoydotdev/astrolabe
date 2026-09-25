@@ -1016,13 +1016,23 @@ def _failure(
     retryable: bool = False,
     http_status: int | None = None,
     payload: Any = None,
+    next_action: str | None = None,
 ) -> dict[str, Any]:
+    """A refusal envelope the agent can act on.
+
+    ``next_action`` is the part that matters: a refusal that only says what went wrong
+    leaves the caller to guess, and the two most expensive failures an agent meets --
+    an expired scoped credential and a mutation it must not resend -- are exactly the
+    ones where guessing is wrong.
+    """
     out: dict[str, Any] = {
         "ok": False,
         "error_code": code,
         "error_detail": safe_text(detail)[:_MAX_ERROR_DETAIL],
         "retryable": retryable,
     }
+    if next_action is not None:
+        out["next_action"] = safe_text(next_action)[:_MAX_ERROR_DETAIL]
     if http_status is not None:
         out["http_status"] = http_status
     if payload is not None:
@@ -1617,7 +1627,12 @@ class Runtime:
                 "credential and cookie files are from different generations; refresh atomically",
             )
         if not auth and not self.settings.allow_anonymous:
-            return _failure("NO_BEARER", "no exact scoped credential exists for this channel")
+            return _failure(
+                "NO_BEARER",
+                "no exact scoped credential exists for this channel",
+                next_action="this is an operator action: the credential source has no entry "
+                "for this channel. Retrying will not help; inspect astrolabe://health.",
+            )
         try:
             return await subscribe_channel(
                 channel,
@@ -1786,7 +1801,12 @@ class Runtime:
             max_array_length=self.settings.max_argument_array_length,
         )
         if not budget["valid"]:
-            return _failure("ARGUMENT_LIMIT_EXCEEDED", json.dumps(budget["errors"]))
+            return _failure(
+                "ARGUMENT_LIMIT_EXCEEDED",
+                json.dumps(budget["errors"]),
+                next_action="narrow the arguments: the payload exceeds a configured depth, "
+                "width or length budget",
+            )
         validation = validate_json_schema(arguments, tool["input_schema"])
         if not validation["valid"]:
             return _failure("BAD_ARGUMENTS", json.dumps(validation["errors"]))
@@ -1805,6 +1825,8 @@ class Runtime:
             return _failure(
                 "NO_BEARER",
                 "no exact scoped credential exists for this operation; refresh target authentication",
+                next_action="this is an operator action: no credential is configured for this "
+                "operation. Retrying will not help; inspect astrolabe://health.",
             )
         headers = _safe_headers(auth)
         try:
@@ -2756,17 +2778,24 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
             },
         ),
     )
-    async def describe_operation(operation_id: str) -> dict[str, Any]:
+    async def describe_operation(operation_id: str | None = None) -> dict[str, Any]:
         """Describe one operation without revealing captured request text or credentials.
 
         The response carries the operation's ``input_schema`` when the operation has a
         generated tool, so an agent can call it without reading the full manifest.
         """
+        if not operation_id:
+            return _failure("BAD_ARGUMENTS", "operation_id is required",
+            next_action="call search_operations to list operation ids")
         item = _find_inventory(operation_id)
         return (
             {"ok": True, "operation": _with_input_schema(item)}
             if item is not None
-            else _failure("OPERATION_NOT_FOUND", "operation identifier is unknown")
+            else _failure(
+                "OPERATION_NOT_FOUND",
+                "operation identifier is unknown",
+                next_action="call search_operations to list the operation ids this chart has",
+            )
         )
 
     @server.tool(
@@ -2779,10 +2808,18 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
             interactions={"type": "array", "items": {"type": "object"}},
         ),
     )
-    async def trace_surface(surface: str) -> dict[str, Any]:
+    async def trace_surface(surface: str | None = None) -> dict[str, Any]:
         """Trace a surface to recorded interactions and evidence IDs."""
+        if not surface:
+            return _failure("BAD_ARGUMENTS", "surface is required",
+            next_action="call coverage_report to see the recorded surfaces")
         if graph is None:
-            return _failure("GRAPH_UNAVAILABLE", "no backend graph is configured")
+            return _failure(
+                "GRAPH_UNAVAILABLE",
+                "no backend graph is configured",
+                next_action="re-run `astrolabe map` to produce a graph, or omit the argument "
+                "to use the chart inventory instead",
+            )
         candidates = [
             item
             for item in graph.get("surfaces", [])
@@ -2831,7 +2868,12 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
     async def diff_contract(operation_id: str | None = None) -> dict[str, Any]:
         """List sanitized drift metadata from the versioned backend graph."""
         if graph is None:
-            return _failure("GRAPH_UNAVAILABLE", "no backend graph is configured")
+            return _failure(
+                "GRAPH_UNAVAILABLE",
+                "no backend graph is configured",
+                next_action="re-run `astrolabe map` to produce a graph, or omit the argument "
+                "to use the chart inventory instead",
+            )
         drifts = [
             {
                 key: item.get(key)
@@ -2922,11 +2964,21 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         }
 
     @server.tool(tags={"execution", "query"}, output_schema=_discovery_schema())
-    async def invoke_query(operation_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def invoke_query(operation_id: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         """Invoke an exact, current, provider-approved read operation by stable identifier."""
+        if not operation_id:
+            return _failure("BAD_ARGUMENTS", "operation_id is required",
+            next_action="call search_operations to list operation ids")
+        if arguments is None:
+            arguments = {}
         tool = _find_executable(operation_id)
         if tool is None or tool.get("type") != SemanticKind.QUERY.value:
-            return _failure("OPERATION_NOT_INVOCABLE", "operation is not an executable query")
+            return _failure(
+                "OPERATION_NOT_INVOCABLE",
+                "operation is not an executable query",
+                next_action="call search_operations and pick one marked invocable; writes are "
+                "gated behind the operator's --include-mutations opt-in",
+            )
         return await runtime.execute(tool, arguments)
 
     @server.tool(
@@ -2936,11 +2988,21 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
             proof={"type": "object", "description": "explicit proof metadata"},
         ),
     )
-    async def verify_operation(operation_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def verify_operation(operation_id: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         """Actively verify an approved read operation and return explicit proof metadata."""
+        if not operation_id:
+            return _failure("BAD_ARGUMENTS", "operation_id is required",
+            next_action="call search_operations to list operation ids")
+        if arguments is None:
+            arguments = {}
         tool = _find_executable(operation_id)
         if tool is None or tool.get("type") != SemanticKind.QUERY.value:
-            return _failure("OPERATION_NOT_INVOCABLE", "operation is not an executable query")
+            return _failure(
+                "OPERATION_NOT_INVOCABLE",
+                "operation is not an executable query",
+                next_action="call search_operations and pick one marked invocable; writes are "
+                "gated behind the operator's --include-mutations opt-in",
+            )
         result = await runtime.execute(tool, arguments)
         schema_validated = (result.get("_astrolabe") or {}).get("schema_validated") is True
         success = (
@@ -3007,11 +3069,17 @@ def create_server(settings: Settings | None = None, *, auth: AuthProvider | None
         output_schema=_discovery_schema(),
     )
     async def subscribe_events(
-        channel_id: str,
+        channel_id: str | None = None,
         max_events: int = 100,
         last_event_id: str | None = None,
     ) -> dict[str, Any]:
         """Read a bounded, cancelable WebSocket/socket.io/SSE subscription."""
+        if not channel_id:
+            return _failure(
+                "BAD_ARGUMENTS",
+                "channel_id is required",
+                next_action="call coverage_report to see the recorded event channels",
+            )
         return await runtime.subscribe_events(
             channel_id,
             max_events=max_events,
