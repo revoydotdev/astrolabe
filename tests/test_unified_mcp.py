@@ -53,6 +53,7 @@ MAPPING_TOOL_NAMES = {
     "chart_status",
     "register_session",
     "revoke_session",
+    "scan_site",
     "generate_chart",
     "import_har",
     "list_charts",

@@ -234,9 +234,7 @@ def create_server(
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)
         if datetime.now(UTC) >= deadline:
-            raise ValueError(
-                "session has expired; register a new one with register_session"
-            )
+            raise ValueError("session has expired; register a new one with register_session")
         return resolved
 
     def private_json(folder: str, name: str, value) -> Path:
@@ -529,21 +527,19 @@ def create_server(
         # guarantee is that no value is placed in this dict at all, and a test scans
         # the serialized response for every submitted value. Errors still pass through
         # redact() via safe_text in _refusals.
-        return (
-            {
-                "ok": True,
-                "handle": handle,
-                "domain": host,
-                "cookie_names": sorted(cookie_names),
-                "header_names": sorted(header_names),
-                "expires_at": record["expires_at"],
-                # Derived from the handle, not the domain: its purpose is to let an
-                # operator correlate a handle seen in a log without the handle itself
-                # appearing. The handle is 256 bits of CSPRNG output, so this digest
-                # is not invertible and needs no separate salt file to be safe.
-                "fingerprint": hashlib.sha256(handle.encode()).hexdigest()[:16],
-            }
-        )
+        return {
+            "ok": True,
+            "handle": handle,
+            "domain": host,
+            "cookie_names": sorted(cookie_names),
+            "header_names": sorted(header_names),
+            "expires_at": record["expires_at"],
+            # Derived from the handle, not the domain: its purpose is to let an
+            # operator correlate a handle seen in a log without the handle itself
+            # appearing. The handle is 256 bits of CSPRNG output, so this digest
+            # is not invertible and needs no separate salt file to be safe.
+            "fingerprint": hashlib.sha256(handle.encode()).hexdigest()[:16],
+        }
 
     @server.tool(
         annotations=ToolAnnotations(
@@ -573,6 +569,98 @@ def create_server(
                 target.unlink()
                 removed += 1
         return {"ok": True, "revoked": removed > 0}
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=True
+        )
+    )
+    @_refusals
+    async def scan_site(
+        url: str | None = None,
+        max_surfaces: int = 20,
+        static_concurrency: int = 4,
+        max_static_requests: int = 50,
+        max_origin_requests: int = 50,
+        max_total_requests: int = 100,
+        max_static_resources: int = 25,
+        max_static_bytes: int = 20_000_000,
+        max_static_resource_bytes: int = 5_000_000,
+        delay_ms: int = 0,
+    ) -> dict:
+        """Source-scan a site from a seed URL and scaffold a recipe, without logging in.
+
+        Not read-only: it drives a browser, writes scan.json/scan.md and a recipe
+        scaffold into the returned directory, and fetches the site's own assets.
+        Every budget is re-validated here rather than trusted from the CLI.
+
+        The authorization envelope is deliberately NOT a tool argument. Scoping
+        flags on the underlying command -- which static hosts may be fetched, how
+        sensitive an account may be treated, which paths are authorized or
+        prohibited, and operator seed URLs -- stay operator-owned, set by
+        configuration rather than by a caller. An agent that could widen its own
+        authorization envelope would make the whole gate meaningless.
+        """
+
+        def bounded(value: int, name: str, low: int, high: int) -> int:
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ValueError(f"{name} must be an integer between {low} and {high}")
+            return value
+
+        if not url:
+            raise ValueError("url is required; pass a page on the site you are authorized to scan")
+        host = normalize_host(urlsplit(url).hostname or "")
+        validate_url(url, {host}, schemes=("https",), resolve=False)
+
+        bounded(max_surfaces, "max_surfaces", 1, 200)
+        bounded(static_concurrency, "static_concurrency", 1, 32)
+        bounded(max_static_requests, "max_static_requests", 1, 2000)
+        bounded(max_origin_requests, "max_origin_requests", 1, 2000)
+        bounded(max_total_requests, "max_total_requests", 1, 5000)
+        bounded(max_static_resources, "max_static_resources", 1, 500)
+        bounded(max_static_bytes, "max_static_bytes", 1, 200_000_000)
+        bounded(max_static_resource_bytes, "max_static_resource_bytes", 1, 50_000_000)
+        bounded(delay_ms, "delay_ms", 0, 60_000)
+
+        destination = directory(f"scan-{host}-{uuid4().hex[:12]}")
+        scanned_at = datetime.now(UTC).isoformat()
+        args = [
+            "scan",
+            url,
+            "--local",
+            "--no-burp",
+            "--out",
+            str(destination),
+            "--max-surfaces",
+            str(max_surfaces),
+            "--static-concurrency",
+            str(static_concurrency),
+            "--max-static-requests",
+            str(max_static_requests),
+            "--max-origin-requests",
+            str(max_origin_requests),
+            "--max-total-requests",
+            str(max_total_requests),
+            "--max-static-resources",
+            str(max_static_resources),
+            "--max-static-bytes",
+            str(max_static_bytes),
+            "--max-static-resource-bytes",
+            str(max_static_resource_bytes),
+            "--delay-ms",
+            str(delay_ms),
+        ]
+        # Serialized against a capture: both drive a real browser, and a single-browser
+        # host cannot run two at once.
+        async with browser_lock:
+            result = await run(args, 900, "scan")
+        result.pop("result", None)
+        result["scan_directory"] = str(destination)
+        # A scan is a point-in-time scaffold, not a live view: the recipe reflects
+        # the site as it was when this ran. The artifact carries no timestamp of its
+        # own, so the tool stamps when it launched rather than implying freshness.
+        result["scanned_at"] = scanned_at
+        return result
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals
@@ -672,9 +760,7 @@ def create_server(
             )
         host = normalize_host(domain)
         sources = [
-            item
-            for item in (cookies_file, browser, cdp_endpoint, session)
-            if item is not None
+            item for item in (cookies_file, browser, cdp_endpoint, session) if item is not None
         ]
         if len(sources) > 1:
             raise ValueError(
@@ -795,9 +881,7 @@ def create_server(
                 "har_file is required; pass a workspace-relative .har path; see the tool description"
             )
         if not domain:
-            raise ValueError(
-                "domain is required; see the tool description for the exact host"
-            )
+            raise ValueError("domain is required; see the tool description for the exact host")
         host = normalize_host(domain)
         source = (root / har_file).resolve()
         if not source.is_relative_to(root) or not source.is_file():
@@ -852,9 +936,7 @@ def create_server(
         except (OSError, ValueError, KeyError) as exc:
             raise ValueError("capture directory has no endpoints.json base_domain") from exc
         sources = [
-            item
-            for item in (cookies_file, browser, cdp_endpoint, session)
-            if item is not None
+            item for item in (cookies_file, browser, cdp_endpoint, session) if item is not None
         ]
         if len(sources) > 1:
             raise ValueError(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -610,3 +611,182 @@ async def test_unset_allowlist_refuses_every_domain(tmp_path, monkeypatch):
     for domain in ("example.com", "other.test", "a.b.c.example"):
         with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
             await _register(server, domain=domain)
+
+
+# ----- scan_site: the authorization envelope is not a tool argument -----------
+
+# Scoping inputs of the underlying `astrolabe scan` command. Each one either widens
+# what may be fetched or how an account may be treated, so the operator owns them.
+# Clock granularity differs between the tool and the test runner.
+_STAMP_SLOP = __import__("datetime").timedelta(seconds=5)
+
+SCAN_ENVELOPE_ARGS = {
+    "allowed_static_host",
+    "account_risk",
+    "authorized_path",
+    "prohibited_path",
+    "prohibited_action",
+    "operator_seed",
+    "working_hours_utc",
+    "host",
+}
+
+
+@pytest.mark.asyncio
+async def test_scan_site_exposes_no_authorization_envelope_argument(tmp_path):
+    """The never-expose list, made machine-checkable.
+
+    These stay operator-owned. An agent able to widen its own authorization envelope
+    would make the gate meaningless, and a comment saying so is not a control.
+    """
+    async with Client(create_server(tmp_path)) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    assert "scan_site" in tools
+    properties = set((tools["scan_site"].input_schema or {}).get("properties") or {})
+    assert not (properties & SCAN_ENVELOPE_ARGS), (
+        f"scan_site exposes operator-owned arguments: {sorted(properties & SCAN_ENVELOPE_ARGS)}"
+    )
+    assert properties, "scan_site advertised no arguments at all"
+
+
+@pytest.mark.asyncio
+async def test_scan_site_is_not_annotated_read_only(tmp_path):
+    """cmd_scan's own docstring calls the scan read-only; the command is not.
+
+    It writes scan.json/scan.md and a recipe scaffold, and fetches the site's assets.
+    """
+    async with Client(create_server(tmp_path)) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    annotations = tools["scan_site"].annotations
+    assert annotations is not None
+    assert annotations.read_only_hint is False
+    assert annotations.open_world_hint is True
+
+
+@pytest.mark.asyncio
+async def test_scan_site_returns_the_standard_envelope(tmp_path, monkeypatch):
+    calls = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        result = await client.call_tool("scan_site", {"url": "https://example.com/"})
+    assert calls, "scan never invoked the CLI"
+    payload = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
+    assert set(payload) >= {"ok", "exit_code", "log", "scan_directory"}
+    argv = [str(part) for part in calls[0]]
+    assert argv[0].endswith("python") and "scan" in argv
+
+
+@pytest.mark.asyncio
+async def test_scan_site_requires_a_url(tmp_path, monkeypatch):
+    calls = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        with pytest.raises(ToolError, match="url is required"):
+            await client.call_tool("scan_site", {})
+    assert not calls, "a scan with no seed URL reached the CLI"
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("max_surfaces", 0),
+        ("max_surfaces", 201),
+        ("static_concurrency", 0),
+        ("static_concurrency", 33),
+        ("max_static_requests", 0),
+        ("max_origin_requests", 2001),
+        ("max_total_requests", 0),
+        ("max_total_requests", 5001),
+        ("max_static_resources", 0),
+        ("max_static_bytes", 0),
+        ("max_static_resource_bytes", 0),
+        ("delay_ms", -1),
+        ("delay_ms", 60_001),
+    ],
+)
+async def test_scan_site_rejects_each_out_of_range_budget(tmp_path, monkeypatch, argument, value):
+    """One case per budget, mirroring test_invalid_map_inputs_fail_before_subprocess."""
+    calls = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        with pytest.raises(ToolError, match=f"{argument} must be an integer between"):
+            await client.call_tool("scan_site", {"url": "https://example.com/", argument: value})
+    assert not calls, f"{argument}={value} reached the CLI unvalidated"
+
+
+@pytest.mark.asyncio
+async def test_scan_site_rejects_a_non_https_seed_url(tmp_path, monkeypatch):
+    calls = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("scan_site", {"url": "http://example.com/"})
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_scan_site_rejects_a_traversal_seed_url(tmp_path, monkeypatch):
+    calls = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("scan_site", {"url": "https://example.com/../../etc/passwd"})
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_scan_site_derives_its_own_output_directory(tmp_path, monkeypatch):
+    """The agent never names a destination; the tool does, under the workspace."""
+    calls = _argv_capture(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        result = await client.call_tool("scan_site", {"url": "https://example.com/"})
+    payload = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
+    destination = Path(payload["scan_directory"])
+    assert destination.parent == tmp_path, "scan wrote outside the workspace"
+    assert destination.name.startswith("scan-example.com-")
+    assert "--out" in [str(part) for part in calls[0]]
+
+
+@pytest.mark.asyncio
+async def test_scan_site_serializes_against_map_site_on_the_browser_lock(tmp_path, monkeypatch):
+    """Both drive a real browser, so a single-browser host cannot run two at once."""
+
+    async def subprocess(*args, **kwargs):
+        active[0] += 1
+        if active[0] > 1:
+            overlap.append(active[0])
+        await asyncio.sleep(0.05)
+        active[0] -= 1
+
+        class P:
+            returncode = 0
+
+            async def communicate(self):
+                return b'{"ok":true}', b""
+
+        return P()
+
+    active = [0]
+    overlap: list[int] = []
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    async with Client(create_server(tmp_path)) as client:
+        await asyncio.gather(
+            client.call_tool("scan_site", {"url": "https://example.com/"}),
+            client.call_tool("map_site", {"domain": "example.com"}),
+        )
+    assert not overlap, "scan_site and map_site ran concurrently on the browser lock"
+
+
+@pytest.mark.asyncio
+async def test_scan_site_reports_when_the_scaffold_was_captured(tmp_path, monkeypatch):
+    """A scan is a point-in-time scaffold, not a live view of the site.
+
+    The artifact carries no timestamp of its own, so the tool stamps when it ran.
+    Without it an agent can present a stale scaffold as current.
+    """
+    from datetime import datetime
+
+    _argv_capture(monkeypatch)  # intercept the CLI; argv is asserted elsewhere
+    before = datetime.now().astimezone()
+    async with Client(create_server(tmp_path)) as client:
+        result = await client.call_tool("scan_site", {"url": "https://example.com/"})
+    payload = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
+    assert "scanned_at" in payload, "a scan scaffold was returned with no capture time"
+    stamped = datetime.fromisoformat(payload["scanned_at"])
+    assert stamped.tzinfo is not None, "scanned_at must be timezone-aware"
+    assert stamped >= before.replace(microsecond=0) - _STAMP_SLOP

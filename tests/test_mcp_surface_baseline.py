@@ -50,6 +50,7 @@ MAPPING_TOOL_NAMES = [
     "preflight",
     "register_session",
     "revoke_session",
+    "scan_site",
     "solve_challenge",
     "verify_chart",
 ]
