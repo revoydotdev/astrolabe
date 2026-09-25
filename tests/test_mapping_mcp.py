@@ -402,3 +402,15 @@ async def test_import_har_runs_the_real_pipeline_into_a_chart(tmp_path):
     sources = {op["proof"]["observed"].get("source") for op in contract["operations"].values()}
     assert sources == {"har-import"}
     assert (chart / "toolpack.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_chart_status_without_provenance_is_honest(tmp_path):
+    """The mapping server can run without the unified facade's mount data. It must
+    report the empty case rather than omit the keys."""
+    async with Client(create_server(tmp_path)) as client:
+        status = (await client.call_tool("chart_status", {})).data
+    assert status["mounted"] == {}
+    assert status["skipped"] == []
+    assert status["charts_on_disk_not_mounted"] == []
+    assert status["code_root"] and status["runtime_module_path"]

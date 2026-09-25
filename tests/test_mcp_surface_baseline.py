@@ -34,7 +34,11 @@ MAPPING_INSTRUCTIONS = (
     "to invoke its read operations."
 )
 
+# Frozen at 799d802, the last commit of the SDK migration. ``chart_status`` was
+# added afterwards by todo 4, which is why this list grew: the migration itself
+# changed nothing here, and that is what this file exists to prove.
 MAPPING_TOOL_NAMES = [
+    "chart_status",
     "generate_chart",
     "import_har",
     "list_charts",

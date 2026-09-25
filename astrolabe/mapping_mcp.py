@@ -9,7 +9,9 @@ import os
 import re
 import stat
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -93,10 +95,26 @@ def create_server(
     browser_auth_domains: frozenset[str] | None = None,
     cdp_endpoints: frozenset[str] | None = None,
     toolpack_root: Path | None = None,
+    mount_provenance: Callable[[], dict[str, Any]] | None = None,
 ) -> FastMCP:
     root = (workspace or default_workspace()).resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     toolpacks = Path(toolpack_root).resolve() if toolpack_root is not None else None
+    module_path = runtime_module_path()
+    code = module_path.parents[1]
+
+    def chart_relative(path: str | Path) -> str:
+        """Path relative to the tree that holds it, so responses never leak an
+        absolute host path. Falls back to the workspace, then to the bare name."""
+        resolved = Path(path).resolve()
+        for base in (toolpacks, root):
+            if base is None:
+                continue
+            try:
+                return str(resolved.relative_to(base))
+            except ValueError:
+                continue
+        return resolved.name
     # Operator configuration, never a tool argument. Empty means disabled.
     browser_domains = frozenset(
         normalize_host(d)
@@ -258,8 +276,6 @@ def create_server(
     @server.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
     async def list_charts() -> dict:
         """List generated Chart paths without reading credentials or captures."""
-        module_path = runtime_module_path()
-        code = module_path.parents[1]
         return {
             "workspace": str(root),
             "toolpack_root": str(toolpacks) if toolpacks is not None else None,
@@ -270,6 +286,40 @@ def create_server(
                 {"directory": str(path.parent.relative_to(root)), "toolpack": str(path)}
                 for path in sorted(root.glob("*/toolpack.json"))[:200]
                 if path.resolve().is_relative_to(root)
+            ],
+        }
+
+    @server.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
+    async def chart_status() -> dict:
+        """Report which Charts are mounted, which were skipped and why, and which
+        are on disk but unreachable.
+
+        A silently skipped pack is the failure this exists to make visible: without
+        it an agent sees a smaller tool list and cannot tell a skip apart from a
+        chart that was never captured.
+        """
+        provenance = mount_provenance() if mount_provenance is not None else {}
+        mounted: dict[str, str] = dict(provenance.get("mounted") or {})
+        skipped: list[dict[str, str]] = list(provenance.get("skipped") or [])
+        mounted_paths = {str(Path(p).resolve()) for p in mounted.values()}
+        skipped_paths = {str(Path(s["pack_path"]).resolve()) for s in skipped}
+        on_disk = sorted(toolpacks.glob("*/toolpack.json")) if toolpacks is not None else []
+        return {
+            "mounted": {ns: chart_relative(p) for ns, p in sorted(mounted.items())},
+            "skipped": [
+                {"pack": chart_relative(s["pack_path"]), "reason": s["reason"]} for s in skipped
+            ],
+            "configured_roots": [
+                chart_relative(Path(r)) for r in (provenance.get("configured_roots") or [])
+            ],
+            "code_root": str(code),
+            "runtime_module_path": str(module_path),
+            "agree": toolpacks is None or toolpacks == code,
+            "charts_on_disk_not_mounted": [
+                chart_relative(path)
+                for path in on_disk
+                if str(path.resolve()) not in mounted_paths
+                and str(path.resolve()) not in skipped_paths
             ],
         }
 

@@ -36,6 +36,7 @@ _QUALCOMM_DOMAIN_RAW = "docs.qualcomm.com"
 _QUALCOMM_DOMAIN_SANITIZED = "docs_qualcomm_com"
 
 MAPPING_TOOL_NAMES = {
+    "chart_status",
     "generate_chart",
     "import_har",
     "list_charts",
@@ -480,3 +481,58 @@ async def test_instructions_are_identical_regardless_of_enumeration_order(
     monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(reversed(paths)))
     backward = create_unified_server().instructions
     assert forward == backward
+
+
+# ----- chart_status ----------------------------------------------------------
+
+
+async def test_chart_status_reports_a_collision_with_its_reason(tmp_workspace, monkeypatch):
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    paths = _synthetic_packs(tmp_workspace, 2)
+    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    for path in paths:  # same base_domain -> the second pack collides
+        pack = dict(base)
+        pack["base_domain"] = "collide.example.test"
+        Path(path).write_text(json.dumps(pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(paths))
+    server = create_unified_server()
+    async with Client(server) as client:
+        status = (await client.call_tool("chart_status", {})).data
+    assert len(status["mounted"]) == 1
+    assert status["skipped"]
+    assert any("collision" in entry["reason"] for entry in status["skipped"])
+
+
+async def test_chart_status_flags_a_pack_that_lands_out_of_band(tmp_workspace, monkeypatch):
+    """The disk-vs-mounted diff is the whole point, so it must notice a chart
+    that appears after the server was built."""
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", str(tmp_workspace))
+    server = create_unified_server()
+    async with Client(server) as client:
+        before = (await client.call_tool("chart_status", {})).data
+        assert before["charts_on_disk_not_mounted"] == []
+        late = tmp_workspace / "late-arrival"
+        late.mkdir()
+        (late / "toolpack.json").write_text(_REPO_TOOLPACK_QUALCOMM.read_text())
+        after = (await client.call_tool("chart_status", {})).data
+    assert after["charts_on_disk_not_mounted"] == ["late-arrival/toolpack.json"]
+
+
+async def test_chart_status_never_returns_an_absolute_chart_path(tmp_workspace, monkeypatch):
+    monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(_synthetic_packs(tmp_workspace, 3)))
+    server = create_unified_server()
+    async with Client(server) as client:
+        status = (await client.call_tool("chart_status", {})).data
+    for field in ("mounted", "skipped", "configured_roots", "charts_on_disk_not_mounted"):
+        value = status[field]
+        paths = (
+            list(value.values())
+            if field == "mounted"
+            else [entry["pack"] for entry in value]
+            if field == "skipped"
+            else value
+        )
+        assert not [p for p in paths if p.startswith("/")], f"{field} leaked an absolute path"

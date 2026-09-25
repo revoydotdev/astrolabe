@@ -95,19 +95,28 @@ def _toolpack_env() -> tuple[str | None, list[str]]:
     )
 
 
-def _configured_toolpack_root() -> Path | None:
-    """The source tree an operator pointed the toolpack knobs at, if any.
+def _configured_roots() -> list[Path]:
+    """Every configured directory root, in precedence order and de-duplicated.
 
-    Only directories count. A single-file ``ASTROLABE_TOOLPACK`` names one pack,
-    not a tree, so it cannot disagree with the imported code about which checkout
-    is authoritative.
+    A single-file ``ASTROLABE_TOOLPACK`` names one pack rather than a tree, so it
+    is not a root.
     """
     single, multi = _toolpack_env()
+    roots: list[Path] = []
     for token in ([single] if single else []) + multi:
         candidate = _expand_user_p(Path(token))
-        if candidate.is_dir():
-            return candidate.resolve()
-    return None
+        if not candidate.is_dir():
+            continue
+        resolved = candidate.resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _configured_toolpack_root() -> Path | None:
+    """The first configured directory root, which is the authoritative tree."""
+    roots = _configured_roots()
+    return roots[0] if roots else None
 
 
 def _collect_toolpack_paths() -> list[Path]:
@@ -286,11 +295,22 @@ def create_unified_server() -> FastMCP:
             flush=True,
         )
 
-    server = create_mapping_server(toolpack_root=toolpack_root)
     mounted_namespaces: set[str] = set()
+    mounted_packs: dict[str, str] = {}
     mounted = 0
     skipped: list[tuple[str, str]] = []
     contracts: list[str] = []
+    # Threaded in rather than read back off a public attribute at call time: the
+    # mount and skip outcomes do not exist until after the mapping server is built,
+    # so a closure is what lets chart_status observe them.
+    server = create_mapping_server(
+        toolpack_root=toolpack_root,
+        mount_provenance=lambda: {
+            "mounted": dict(mounted_packs),
+            "skipped": [{"pack_path": p, "reason": r} for p, r in skipped],
+            "configured_roots": _configured_roots(),
+        },
+    )
 
     for pack_path in _collect_toolpack_paths():
         try:
@@ -320,6 +340,7 @@ def create_unified_server() -> FastMCP:
             continue
 
         mounted_namespaces.add(namespace_token)
+        mounted_packs[f"typed_{namespace_token}"] = str(pack_path)
         mounted += 1
         if typed.instructions:
             contracts.append(typed.instructions)
