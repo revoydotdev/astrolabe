@@ -839,3 +839,187 @@ def test_crud_hint_reads_the_verb_wherever_the_convention_puts_it(name, expected
     from astrolabe.mcpgen import crud_hint
 
     assert crud_hint(name, "mutation") == expected
+
+
+# ----- graph-backed inventory: per-operation fields must survive --------------
+
+
+def _graph_backed_capture(
+    tmp_path,
+    *,
+    parse_confidence: str | None,
+    returns: list[str],
+    request_media_type: str,
+) -> None:
+    """A capture holding BOTH graph.json and endpoints.json for one GraphQL query.
+
+    The graph deliberately carries none of the analyzer-derived per-operation facts,
+    which is what a real capture looks like: measured across 49 charts,
+    parse_confidence, returns, directives, root_fields and input_shape appear in
+    zero of them, while endpoints.json carries all of them.
+    """
+    query = "query Viewer { viewer { id } }"
+    graph = {
+        "schema_version": 1,
+        "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+        "target": "example.com",
+        "runs": [],
+        "origins": [{"id": "o1", "scheme": "https", "host": "example.com"}],
+        "endpoints": [
+            {"id": "e1", "origin_id": "o1", "path": "/api/graphql", "response_media_types": []}
+        ],
+        "request_templates": [{"id": "t1", "method": "POST", "body_template": {"query": query}}],
+        "operations": [
+            {
+                "id": "op1",
+                "protocol": "graphql-inline",
+                "semantic_kind": "query",
+                "request_template_ids": ["t1"],
+                "endpoint_ids": ["e1"],
+                "aliases": ["Viewer"],
+                "operation_names": ["Viewer"],
+                "lifecycle": {"observation_count": 1},
+            }
+        ],
+        "evidence": [],
+        "authentication_flows": [],
+        "credential_scopes": [],
+        "schemas": [],
+        "surfaces": [],
+        "interactions": [],
+        "event_channels": [],
+        "proofs": [],
+        "drifts": [],
+        "rate_policies": [],
+    }
+    inventory = {
+        "base_domain": "example.com",
+        "graphql_endpoints": ["/api/graphql"],
+        "auth_headers": {},
+        "graphql_operations": {
+            "Viewer": {
+                "semantic_kind": "query",
+                "type": "query",
+                "protocol": "graphql-inline",
+                "http_method": "POST",
+                "request_url": "https://example.com/api/graphql",
+                "query": query,
+                "operation": "Viewer",
+                "parse_confidence": parse_confidence,
+                "request_media_type": request_media_type,
+                "returns": returns,
+                "directives": [],
+                "root_fields": ["viewer"],
+                "variables": [],
+                "input_shape": None,
+            }
+        },
+        "rest_endpoints": [],
+    }
+    (tmp_path / "graph.json").write_text(json.dumps(graph))
+    (tmp_path / "endpoints.json").write_text(json.dumps(inventory))
+
+
+def _only_tool(pack: dict, transport: str = "graphql") -> dict:
+    tools = [t for t in pack["tools"] if t.get("transport") == transport]
+    assert len(tools) == 1, f"expected exactly one {transport} tool, got {len(tools)}"
+    return tools[0]
+
+
+def test_low_confidence_graphql_is_gated_when_graph_backed(tmp_path):
+    """The assertion that matters: the restored field must RE-ARM the gate.
+
+    parse_confidence=None is in the gate's own exempt set, so before the round-trip
+    fix this test could not have distinguished a working gate from a dead one.
+    """
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="transport-only",
+        returns=["viewer"],
+        request_media_type="application/graphql+json",
+    )
+    tool = _only_tool(build_pack(str(tmp_path)))
+    assert tool["exposed"] is False
+    assert "low confidence" in tool["reason"]
+
+
+def test_graph_backed_tool_keeps_confidence_and_real_returns(tmp_path):
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer", "session_id"],
+        request_media_type="application/graphql+json",
+    )
+    tool = _only_tool(build_pack(str(tmp_path)))
+    assert tool["exposed"] is True
+    assert tool["parse_confidence"] == "parsed"
+    assert "n/a" not in tool["description"]
+    assert "viewer" in tool["description"]
+
+
+def test_request_media_type_survives_the_graph_round_trip(tmp_path):
+    """A capture taken over application/graphql+json must not be replayed as
+    application/json, which is what the dropped field caused."""
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer"],
+        request_media_type="application/graphql+json",
+    )
+    assert _only_tool(build_pack(str(tmp_path)))["request_media_type"] == (
+        "application/graphql+json"
+    )
+
+
+def test_merge_is_key_set_driven_not_a_field_list():
+    """A fact nobody has enumerated yet must still survive.
+
+    Asserted against the merge seam directly with a key that appears in no list
+    anywhere in this repository, which is the only way to tell a key-set driven
+    merge from a hardcoded one.
+    """
+    from astrolabe.mcpgen import _merge_missing_operations
+
+    derived = {"graphql_operations": {"Viewer": {"query": "query Viewer {x}", "calls": 3}}}
+    inventory = {
+        "graphql_operations": {
+            "Viewer": {
+                "query": "query Viewer {x}",
+                "calls": 999,  # the graph wins wherever it already has a value
+                "some_fact_added_next_year": "kept",
+            }
+        }
+    }
+    _merge_missing_operations(derived, inventory)
+    operation = derived["graphql_operations"]["Viewer"]
+    assert operation["some_fact_added_next_year"] == "kept"
+    assert operation["calls"] == 3, "must not overwrite a graph-derived value"
+
+
+def test_merge_ignores_operations_the_graph_did_not_observe():
+    from astrolabe.mcpgen import _merge_missing_operations
+
+    derived: dict = {"graphql_operations": {}}
+    inventory = {"graphql_operations": {"Ghost": {"parse_confidence": "parsed"}}}
+    _merge_missing_operations(derived, inventory)
+    assert derived["graphql_operations"] == {}
+
+
+def test_graph_wins_where_it_has_an_opinion(tmp_path):
+    """The merge fills gaps only; it must never overwrite a graph-derived value.
+
+    Asserted on http_method because that is sourced from the merged operation dict.
+    The tool's ``operation`` field is parsed out of the query text instead, so it
+    cannot witness this property.
+    """
+    _graph_backed_capture(
+        tmp_path,
+        parse_confidence="parsed",
+        returns=["viewer"],
+        request_media_type="application/json",
+    )
+    graph = json.loads((tmp_path / "graph.json").read_text())
+    graph["request_templates"][0]["method"] = "GET"  # graph says GET, endpoints says POST
+    (tmp_path / "graph.json").write_text(json.dumps(graph))
+    tool = _only_tool(build_pack(str(tmp_path)))
+    assert tool["http_method"] == "GET"

@@ -809,6 +809,33 @@ def build_event_channels(inv: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(channels.values(), key=lambda item: item["id"])
 
 
+def _merge_missing_operations(inv: dict[str, Any], inventory: dict[str, Any]) -> None:
+    """Fill per-operation keys the graph-derived inventory lacks from endpoints.json.
+
+    Per-operation facts the analyzer derives are absent from graph.json entirely:
+    measured across 49 charts, ``parse_confidence``, ``returns``, ``directives``,
+    ``root_fields`` and ``input_shape`` appear in **zero** of them, while
+    ``endpoints.json`` carries all seven on every operation. Only
+    ``graphql_operations`` is affected -- ``rest_endpoints``,
+    ``websocket_operations`` and ``misc_operations`` were checked across 60 charts
+    and lose nothing.
+
+    Losing ``parse_confidence`` is not cosmetic. The exposure gate exempts ``None``,
+    so with the field missing a low-confidence GraphQL document can never be gated,
+    and the tool description renders ``Returns: n/a`` for every operation.
+
+    Filling only *missing* keys keeps the graph authoritative wherever it has an
+    opinion, and iterating the incoming key set rather than a hand-listed field set
+    means the next derived fact cannot be dropped silently.
+    """
+    derived = inv.get("graphql_operations") or {}
+    for alias, operation in (inventory.get("graphql_operations") or {}).items():
+        target = derived.get(alias)
+        if isinstance(target, dict) and isinstance(operation, dict):
+            for key, value in operation.items():
+                target.setdefault(key, value)
+
+
 def build_pack(
     capture_dir: str,
     *,
@@ -839,6 +866,7 @@ def build_pack(
             inventory = json.load(fh)
         for key in ("declared_operations", "client_credentials"):
             inv.setdefault(key, inventory.get(key) or [])
+        _merge_missing_operations(inv, inventory)
     apply_protocol_overrides(capture_dir, inv)
 
     noise = DEFAULT_NOISE
