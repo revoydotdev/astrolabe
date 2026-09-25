@@ -34,9 +34,10 @@ MAPPING_INSTRUCTIONS = (
     "to invoke its read operations."
 )
 
-# Frozen at 799d802, the last commit of the SDK migration. ``chart_status`` was added
-# afterwards by todo 4, which is why this list grew: the migration itself changed nothing
-# here, and that is what this file exists to prove.
+# Frozen at 799d802, the last commit of the SDK migration, and grown twice since by
+# deliberate surface changes: ``chart_status`` (todo 4) and ``register_session``
+# (todo 10). The migration itself changed nothing here, and that is what this file
+# exists to prove.
 #
 # This is the MAPPING server's surface. The unified server adds search_tools and
 # call_tool on top; neither is a mapping tool, so neither belongs in this list.
@@ -47,6 +48,7 @@ MAPPING_TOOL_NAMES = [
     "list_charts",
     "map_site",
     "preflight",
+    "register_session",
     "solve_challenge",
     "verify_chart",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -414,3 +415,131 @@ async def test_chart_status_without_provenance_is_honest(tmp_path):
     assert status["skipped"] == []
     assert status["charts_on_disk_not_mounted"] == []
     assert status["code_root"] and status["runtime_module_path"]
+
+
+# ----- register_session: the agent-held credential trust boundary ------------
+
+_SESSION_COOKIE_VALUE = "SUPER_SECRET_COOKIE_VALUE_9f3a2b"
+_SESSION_HEADER_VALUE = "Bearer SUPER_SECRET_HEADER_VALUE_7c2d1e"
+_SESSION_COOKIE = {
+    "name": "sid",
+    "value": _SESSION_COOKIE_VALUE,
+    "domain": "example.com",
+    "path": "/",
+}
+
+
+def _session_payload(**overrides) -> dict:
+    payload = {
+        "domain": "example.com",
+        "cookies": [dict(_SESSION_COOKIE)],
+        "headers": {"authorization": _SESSION_HEADER_VALUE},
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def _register(server, **overrides) -> dict:
+    async with Client(server) as client:
+        result = await client.call_tool("register_session", _session_payload(**overrides))
+    data = result.data
+    return data if isinstance(data, dict) else json.loads(result.content[0].text)
+
+
+@pytest.mark.asyncio
+async def test_register_session_returns_names_and_never_a_value(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    response = await _register(server)
+    assert response["cookie_names"] == ["sid"]
+    assert response["header_names"] == ["authorization"]
+    # The guarantee, stated explicitly: scan the serialized response for every value
+    # that was submitted. redact() is not relied on here, because it matches on key
+    # names and would blank cookie_names, a field the contract requires.
+    serialized = json.dumps(response)
+    assert _SESSION_COOKIE_VALUE not in serialized
+    assert _SESSION_HEADER_VALUE not in serialized
+    # Also per-value, so a value nested inside a list or dict cannot hide from the
+    # serialized scan above.
+    for value in response.values():
+        assert _SESSION_COOKIE_VALUE not in json.dumps(value)
+        assert _SESSION_HEADER_VALUE not in json.dumps(value)
+
+
+@pytest.mark.asyncio
+async def test_register_session_handle_is_unguessable_and_not_derivable(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    first = await _register(server)
+    second = await _register(server)
+    handle = first["handle"]
+    assert len(handle) >= 22, "handle is too short to be unguessable"
+    assert handle.replace("-", "").replace("_", "").isalnum(), "handle is not URL-safe"
+    assert first["handle"] != second["handle"]
+    assert handle != "example.com"
+    assert "example" not in handle and "com" not in handle
+
+
+@pytest.mark.asyncio
+async def test_register_session_stores_a_private_file(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    response = await _register(server)
+    stored = tmp_path / ".astrolabe" / "sessions" / f"{response['handle']}.json"
+    assert stored.is_file()
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+    assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
+    # The file must actually hold the value: a store that silently dropped it would
+    # look identical from the response alone.
+    assert _SESSION_COOKIE_VALUE in stored.read_text()
+
+
+@pytest.mark.asyncio
+async def test_register_session_refuses_a_domain_without_the_operator_gate(tmp_path):
+    server = create_server(tmp_path)  # gate empty by default
+    with pytest.raises(ToolError) as excinfo:
+        await _register(server)
+    assert "ASTROLABE_SESSION_DOMAINS" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_register_session_gate_is_exact_match_not_a_suffix(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    for lookalike in ("notexample.com", "example.com.evil.test", "sub.example.com"):
+        with pytest.raises(ToolError) as excinfo:
+            await _register(server, domain=lookalike)
+        assert "ASTROLABE_SESSION_DOMAINS" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_register_session_refuses_denied_header_and_cookie_names(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    for denied in ("Host", "Cookie", "Transfer-Encoding"):
+        with pytest.raises(ToolError) as excinfo:
+            await _register(server, headers={denied: "x"}, cookies=[])
+        assert denied in str(excinfo.value) or "not accepted" in str(excinfo.value)
+        assert _SESSION_HEADER_VALUE not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_register_session_refuses_an_empty_session(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    with pytest.raises(ToolError, match="at least one of cookies or headers"):
+        await _register(server, cookies=[], headers={})
+
+
+@pytest.mark.asyncio
+async def test_register_session_refuses_an_oversized_value(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    huge = "v" * 9000
+    with pytest.raises(ToolError, match="exceeds the maximum length"):
+        await _register(server, cookies=[], headers={"x-big": huge})
+    assert huge not in str(server)
+
+
+@pytest.mark.asyncio
+async def test_register_session_label_is_length_and_charset_constrained(tmp_path):
+    """A label is agent-supplied free text that gets stored, so it is constrained."""
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    with pytest.raises(ToolError, match="label must be"):
+        await _register(server, label="<script>alert(1)</script>")
+    with pytest.raises(ToolError, match="label must be"):
+        await _register(server, label="x" * 65)
+    assert (await _register(server, label="checkout run 1"))["ok"] is True

@@ -60,10 +60,17 @@ from .event_runtime import EventAdapterError, subscribe_channel, validate_event_
 from .ir import load_graph
 from .mcpgen import envelope_schema
 from .operation import Protocol, SemanticKind
-from .security import host_matches, redact, resolve_public_addresses, safe_text, validate_url
+from .security import (
+    DENIED_HEADERS,
+    host_matches,
+    redact,
+    resolve_public_addresses,
+    safe_text,
+    validate_url,
+)
 from .validation import validate_json_schema, validate_value_budget
 
-_DENIED_HEADERS = {"connection", "content-length", "cookie", "host", "transfer-encoding"}
+_DENIED_HEADERS = DENIED_HEADERS
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 _JSON_OBJECT_SCHEMA = {"type": "object", "additionalProperties": True}
 _SEARCH_PAGE = 200

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import sys
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -21,7 +24,7 @@ from mcp.types import ToolAnnotations
 
 from .browser import validate_cdp_endpoint
 from .recipe import parse_declarative_recipe
-from .security import normalize_host, safe_text, validate_url
+from .security import DENIED_HEADERS, normalize_host, safe_text, validate_url
 
 CATEGORIES = frozenset(
     {
@@ -37,6 +40,16 @@ CATEGORIES = frozenset(
     }
 )
 MAX_ERROR_CHARS = 600
+
+# An agent-held session is a credential the operator never typed. Bounds on what may
+# be stored keep a single registration from becoming an unbounded write, and keep the
+# stored record small enough to be read safely at resolve time.
+MAX_SESSION_VALUE_CHARS = 8192
+MAX_SESSION_BYTES = 256 * 1024
+SESSION_TTL_SECONDS = 3600
+# A label is free text the agent supplies and that we store, so it is constrained to a
+# charset with no markup and a hard length; it is never rendered into a tool description.
+_LABEL_OK = re.compile(r"[A-Za-z0-9 _.-]{1,64}")
 
 
 def runtime_module_path() -> Path:
@@ -94,6 +107,7 @@ def create_server(
     *,
     browser_auth_domains: frozenset[str] | None = None,
     cdp_endpoints: frozenset[str] | None = None,
+    session_domains: frozenset[str] | None = None,
     toolpack_root: Path | None = None,
     mount_provenance: Callable[[], dict[str, Any]] | None = None,
 ) -> FastMCP:
@@ -124,6 +138,12 @@ def create_server(
     attachable = frozenset(
         validate_cdp_endpoint(endpoint)
         for endpoint in _operator_list(cdp_endpoints, "ASTROLABE_CDP_ENDPOINTS")
+    )
+    # Empty by default, and no tool argument can widen it: an agent may not grant
+    # itself the ability to store a credential for a host the operator has not listed.
+    session_allowed = frozenset(
+        normalize_host(domain)
+        for domain in _operator_list(session_domains, "ASTROLABE_SESSION_DOMAINS")
     )
     server = FastMCP(
         "astrolabe",
@@ -352,6 +372,105 @@ def create_server(
         if result["ok"]:
             result["toolpack"] = str(path / "toolpack.json")
         return result
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        )
+    )
+    @_refusals
+    async def register_session(
+        domain: str | None = None,
+        cookies: list[dict] | None = None,
+        headers: dict[str, str] | None = None,
+        label: str | None = None,
+    ) -> dict:
+        """Store an authenticated session you already hold and return an opaque handle.
+
+        Values are written to a private workspace file and are never returned: the
+        response carries cookie and header NAMES only. Pass the handle to map_site or
+        verify_chart as session=<handle> to use it.
+        """
+        if not domain:
+            raise ValueError("domain is required; pass the host this session authenticates")
+        host = normalize_host(domain)
+        if host not in session_allowed:
+            raise ValueError(
+                "agent-held sessions are disabled for this domain; operator opt-in "
+                "required (ASTROLABE_SESSION_DOMAINS)"
+            )
+        if not cookies and not headers:
+            raise ValueError("supply at least one of cookies or headers; there is nothing to store")
+
+        def bounded(value: Any, what: str) -> None:
+            if isinstance(value, str) and len(value) > MAX_SESSION_VALUE_CHARS:
+                raise ValueError(f"{what} exceeds the maximum length")
+
+        cookie_names: list[str] = []
+        for cookie in cookies or []:
+            if not isinstance(cookie, dict):
+                raise ValueError("each cookie must be an object")
+            name = str(cookie.get("name") or "")
+            if not name:
+                raise ValueError("each cookie needs a name")
+            if name.casefold() in DENIED_HEADERS:
+                raise ValueError(f"cookie name {name!r} is not accepted")
+            bounded(cookie.get("value"), "cookie value")
+            cookie_names.append(name)
+        header_names: list[str] = []
+        for name, value in (headers or {}).items():
+            if str(name).casefold() in DENIED_HEADERS:
+                raise ValueError(f"header name {name!r} is not accepted")
+            bounded(value, "header value")
+            header_names.append(str(name))
+        if label is not None and not _LABEL_OK.fullmatch(label):
+            raise ValueError("label must be 1-64 characters of letters, digits, space, dot, - or _")
+
+        now = datetime.now(UTC)
+        lifetimes = [
+            int(cookie["expires"])
+            for cookie in cookies or []
+            if isinstance(cookie.get("expires"), (int, float)) and cookie["expires"] > 0
+        ]
+        expires_at = (
+            datetime.fromtimestamp(max(lifetimes), UTC)
+            if lifetimes
+            else now + timedelta(seconds=SESSION_TTL_SECONDS)
+        )
+        record = {
+            "version": 1,
+            "domain": host,
+            "label": label,
+            "cookies": cookies or [],
+            "headers": headers or {},
+            "created_at": now.isoformat(),
+            "expires_at": expires_at.isoformat(),
+        }
+        if len(json.dumps(record)) > MAX_SESSION_BYTES:
+            raise ValueError("session is too large to store")
+        # A non-guessable server-minted token: not the domain, not a counter, and not
+        # anything the agent could compute. 256 bits of entropy.
+        handle = secrets.token_urlsafe(32)
+        private_json("sessions", f"{handle}.json", record)
+        # redact() is deliberately NOT applied to this dict. It matches on key names
+        # and blanks any value under one containing "cookie", so it would replace
+        # cookie_names -- a field the contract requires -- with "<redacted>". The real
+        # guarantee is that no value is placed in this dict at all, and a test scans
+        # the serialized response for every submitted value. Errors still pass through
+        # redact() via safe_text in _refusals.
+        return (
+            {
+                "ok": True,
+                "handle": handle,
+                "domain": host,
+                "cookie_names": sorted(cookie_names),
+                "header_names": sorted(header_names),
+                "expires_at": record["expires_at"],
+                "fingerprint": hashlib.sha256(
+                    (host + "\n" + "\n".join(sorted(cookie_names + header_names))).encode()
+                ).hexdigest()[:16],
+            }
+        )
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals

@@ -51,6 +51,7 @@ DISCOVERY_SUFFIXES = {
 MAPPING_TOOL_NAMES = {
     "call_tool",
     "chart_status",
+    "register_session",
     "generate_chart",
     "import_har",
     "list_charts",

@@ -34,6 +34,10 @@ _CANARY_VALUE = re.compile(
     r"[a-z0-9_=-]*",
 )
 
+# Headers a caller may never set: connection framing, the cookie jar (which would
+# silently replace the credential the operator configured), and host routing.
+DENIED_HEADERS = frozenset({"connection", "content-length", "cookie", "host", "transfer-encoding"})
+
 
 class Secret(str):
     """A secret value whose display forms are always redacted.
