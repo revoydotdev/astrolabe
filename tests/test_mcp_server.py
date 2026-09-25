@@ -111,15 +111,16 @@ async def test_verify_operation_reports_actual_proof(
                 "arguments": {},
             },
         )
-    assert result.data["ok"] is success
-    assert result.data["proof"]["success"] is success
-    assert result.data["proof"]["schema_validated"] is validated
+    payload = _as_dict(result)
+    assert payload["ok"] is success
+    assert payload["proof"]["success"] is success
+    assert payload["proof"]["schema_validated"] is validated
     journal = settings.toolpack_path.with_name("verification.jsonl")
     recorded = json.loads(journal.read_text())
     assert recorded["proof"]["success"] is success
     assert "result" not in recorded
     assert "arguments" not in recorded
-    assert result.data["proof_recorded"] is True
+    assert _as_dict(result)["proof_recorded"] is True
 
 
 def _named_tool(tools: list[Any], name: str) -> Any:
@@ -2606,71 +2607,142 @@ def test_declared_operations_accept_pure_inventory(tmp_path, pack):
     assert len(validated["declared_operations"]) == 2
 
 
-# ----- todo 6 baseline: discovery is currently uninformative ------------------
-
-DISCOVERY_TOOLS = [
-    "search_operations",
-    "describe_operation",
-    "trace_surface",
-    "diff_contract",
-    "coverage_report",
-    "invoke_query",
-    "verify_operation",
-    "subscribe_events",
-]
+# ----- todo 6: discovery advertises what it returns, and how to page it -------
 
 
-def _discovery_server(tmp_path: Path, pack: dict[str, Any]) -> FastMCP:
+def _discovery_server(tmp_path: Path, pack: dict[str, Any]):
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
     return create_server(Settings(pack_path, allow_anonymous=True, retries=1))
 
 
-@pytest.mark.asyncio
-async def test_baseline_discovery_tools_advertise_no_output_schema(tmp_path, pack):
-    """BASELINE: every discovery tool's output schema is an empty shell.
+def _as_dict(result: Any) -> dict[str, Any]:
+    """Tool results are plain dicts until a tool declares an output schema.
 
-    FastMCP synthesises an outputSchema with zero properties when a tool declares
-    none, so an agent is told nothing about what these calls return. Flipped by the
-    informativeness change.
+    Declaring one is the point of this change, so results are now validated models.
+    Reading them through one helper keeps every test working either way instead of
+    each one assuming a shape.
     """
+    data = result.data
+    if isinstance(data, dict):
+        return data
+    structured = getattr(result, "structured_content", None)
+    return structured if isinstance(structured, dict) else dict(data)
+
+
+@pytest.mark.asyncio
+async def test_discovery_tools_advertise_real_output_schemas(tmp_path, pack):
     server = _discovery_server(tmp_path, pack)
     async with Client(server) as client:
         tools = {t.name: t for t in await client.list_tools()}
     for name in DISCOVERY_TOOLS:
-        schema = tools[name].output_schema or {}
-        assert not schema.get("properties"), f"{name} unexpectedly advertises properties"
+        properties = (tools[name].output_schema or {}).get("properties") or {}
+        assert properties, f"{name} advertises no output properties"
+        assert "error_code" in properties, f"{name} does not advertise the refusal shape"
 
 
 @pytest.mark.asyncio
-async def test_baseline_search_and_describe_omit_input_schema(tmp_path, pack):
-    """BASELINE: an agent cannot learn how to call an operation from discovery."""
+async def test_discovery_carries_the_operations_input_schema(tmp_path, pack):
+    """An agent must be able to learn how to call an operation from discovery alone."""
     server = _discovery_server(tmp_path, pack)
     async with Client(server) as client:
-        found = await client.call_tool("search_operations", {})
-        assert "input_schema" not in found.data["operations"][0]
-        described = await client.call_tool(
-            "describe_operation", {"operation_id": found.data["operations"][0]["id"]}
+        found = _as_dict(await client.call_tool("search_operations", {}))
+        operation = found["operations"][0]
+        assert operation["input_schema"]["properties"], "search_operations omitted input_schema"
+        described = _as_dict(
+            await client.call_tool("describe_operation", {"operation_id": operation["id"]})
         )
-        assert "input_schema" not in described.data["operation"]
+        assert described["operation"]["input_schema"] == operation["input_schema"]
 
 
 @pytest.mark.asyncio
-async def test_baseline_search_gives_no_truncation_signal(tmp_path, pack):
-    """BASELINE: the 200-item cap is invisible; count reports the pre-cap total."""
+async def test_search_pages_without_silent_truncation(tmp_path, pack, monkeypatch):
+    """The 200 cap used to be invisible while count reported the pre-cap total."""
+    monkeypatch.setattr("astrolabe.mcp_server._SEARCH_PAGE", 1)
     server = _discovery_server(tmp_path, pack)
     async with Client(server) as client:
-        found = await client.call_tool("search_operations", {})
-    assert set(found.data) == {"ok", "count", "operations"}
-    assert "truncated" not in found.data and "cursor" not in found.data
+        first = _as_dict(await client.call_tool("search_operations", {}))
+        assert first["truncated"] is True
+        assert first["count"] > len(first["operations"])
+        second = _as_dict(await client.call_tool("search_operations", {"cursor": first["cursor"]}))
+        assert second["operations"], "the cursor fetched nothing"
+        first_ids = {item["id"] for item in first["operations"]}
+        second_ids = {item["id"] for item in second["operations"]}
+        assert not (first_ids & second_ids), "pages overlap"
 
 
 @pytest.mark.asyncio
-async def test_baseline_trace_surface_without_surfaces_is_graph_unavailable(tmp_path, pack):
-    """The minimal fixture carries no surfaces, so trace_surface cannot reach its
-    SURFACE_NOT_FOUND branch. The claim that branch lists no valid identifiers was
-    verified live against a real pack instead; see .omo/evidence for todo 6."""
+async def test_search_refuses_a_cursor_from_a_different_result_set(tmp_path, pack):
+    """A re-merge between pages must be refused, not silently mis-paged."""
     server = _discovery_server(tmp_path, pack)
     async with Client(server) as client:
-        result = await client.call_tool("trace_surface", {"surface": "search"})
-    assert result.data["error_code"] == "GRAPH_UNAVAILABLE"
+        found = _as_dict(await client.call_tool("search_operations", {}))
+        stale = _as_dict(
+            await client.call_tool(
+                "search_operations", {"cursor": f"{found['count']}:deadbeefcafe"}
+            )
+        )
+    assert stale["error_code"] == "STALE_CURSOR"
+    assert stale["ok"] is False
+
+
+@pytest.mark.asyncio
+def _graph_file(tmp_path: Path) -> Path:
+    """A minimal valid backend graph carrying one surface.
+
+    trace_surface answers GRAPH_UNAVAILABLE without a graph, so the branch this test
+    covers is unreachable from the bare pack fixture.
+    """
+    graph = {
+        "schema_version": 1,
+        "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+        "target": "example.com",
+        "runs": [],
+        "evidence": [],
+        "origins": [],
+        "endpoints": [],
+        "operations": [],
+        "request_templates": [],
+        "authentication_flows": [],
+        "credential_scopes": [],
+        "schemas": [],
+        "surfaces": [{"id": "home", "url": "https://example.com/home?token=secret"}],
+        "interactions": [],
+        "event_channels": [],
+        "proofs": [],
+        "drifts": [],
+        "rate_policies": [],
+    }
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(graph))
+    return path
+
+
+@pytest.mark.asyncio
+async def test_trace_surface_names_the_valid_identifiers(tmp_path, pack):
+    pack_path = tmp_path / "pack.json"
+    pack_path.write_text(json.dumps(pack))
+    server = create_server(
+        Settings(
+            pack_path,
+            allow_anonymous=True,
+            retries=1,
+            graph_path=_graph_file(tmp_path),
+        )
+    )
+    async with Client(server) as client:
+        result = _as_dict(await client.call_tool("trace_surface", {"surface": "search"}))
+    assert result["error_code"] == "SURFACE_NOT_FOUND"
+    assert "valid identifiers" in result["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_orientation_prompt_no_longer_leads_with_the_manifest(tmp_path, pack):
+    """The manifest measured 10506 bytes / ~2.6k tokens for a 12-op pack and embeds
+    both inventory and tools, so leading with it spends the budget before discovery."""
+    server = _discovery_server(tmp_path, pack)
+    async with Client(server) as client:
+        prompt = await client.get_prompt("use_astrolabe", {"goal": "read the user's timeline"})
+    text = " ".join(m.content.text for m in prompt.messages if m.content.type == "text")
+    assert "coverage_report" in text
+    assert text.index("coverage_report") < text.index("astrolabe://manifest")
