@@ -35,6 +35,18 @@ _REPO_TOOLPACK_QUALCOMM = _REPO_CHART_QUALCOMM / "toolpack.json"
 _QUALCOMM_DOMAIN_RAW = "docs.qualcomm.com"
 _QUALCOMM_DOMAIN_SANITIZED = "docs_qualcomm_com"
 
+# The eight per-namespace discovery tools every mounted pack currently re-advertises.
+DISCOVERY_SUFFIXES = {
+    "search_operations",
+    "describe_operation",
+    "trace_surface",
+    "diff_contract",
+    "coverage_report",
+    "invoke_query",
+    "verify_operation",
+    "subscribe_events",
+}
+
 MAPPING_TOOL_NAMES = {
     "chart_status",
     "generate_chart",
@@ -536,3 +548,56 @@ async def test_chart_status_never_returns_an_absolute_chart_path(tmp_workspace, 
             else value
         )
         assert not [p for p in paths if p.startswith("/")], f"{field} leaked an absolute path"
+
+
+# ----- todo 5 baseline: the pre-collapse surface -----------------------------
+
+
+async def test_baseline_one_pack_serves_eight_discovery_tools_plus_its_operations(
+    tmp_workspace, qualcomm_pack, monkeypatch
+):
+    """BASELINE: every mounted pack repeats the whole discovery surface.
+
+    For this pack 10 typed tools are 8 discovery tools plus 2 real operations, so a
+    12-namespace workspace spends ~96 tools re-advertising the same eight calls.
+    Flipped by the collapse.
+    """
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    server = create_unified_server()
+    async with Client(server) as client:
+        names = {t.name for t in await client.list_tools()}
+    # Match by suffix: "search_operations" itself contains an underscore, so splitting
+    # the tool name cannot recover the suffix.
+    discovery = {
+        n
+        for n in names
+        if n.startswith("typed_docs_qualcomm_com_")
+        and any(n.endswith("_" + suffix) for suffix in DISCOVERY_SUFFIXES)
+    }
+    assert len(discovery) == 8, sorted(discovery)
+    operations = {
+        n for n in names if n.startswith("typed_docs_qualcomm_com_") and n not in discovery
+    }
+    assert operations, "the pack contributed no direct operation tools"
+
+
+async def test_baseline_every_invocable_operation_has_a_direct_tool(
+    tmp_workspace, qualcomm_pack, monkeypatch
+):
+    """The invariant the collapse must preserve.
+
+    Each invocable operation is reachable through a direct typed tool today. After
+    the collapse it must stay reachable, just through call_tool instead. Pinning it
+    now is what makes "no reachable operation was lost" checkable rather than assumed.
+    """
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    server = create_unified_server()
+    async with Client(server) as client:
+        names = {t.name for t in await client.list_tools()}
+        coverage = await client.call_tool("typed_docs_qualcomm_com_coverage_report", {})
+    report = coverage.structured_content or {}
+    invocable = report["invocable_count"]
+    direct = {n for n in names if n.startswith("typed_docs_qualcomm_com_")} - {
+        f"typed_docs_qualcomm_com_{suffix}" for suffix in DISCOVERY_SUFFIXES
+    }
+    assert invocable == report["direct_tool_count"] == len(direct) > 0
