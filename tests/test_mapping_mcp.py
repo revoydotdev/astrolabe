@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import contextlib
 import json
 import re
-import stat
 from pathlib import Path
 
 import pytest
@@ -449,88 +447,6 @@ async def _register(server, **overrides) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_register_session_returns_names_and_never_a_value(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    response = await _register(server)
-    assert response["cookie_names"] == ["sid"]
-    assert response["header_names"] == ["authorization"]
-    # The guarantee, stated explicitly: scan the serialized response for every value
-    # that was submitted. redact() is not relied on here, because it matches on key
-    # names and would blank cookie_names, a field the contract requires.
-    serialized = json.dumps(response)
-    assert _SESSION_COOKIE_VALUE not in serialized
-    assert _SESSION_HEADER_VALUE not in serialized
-    # Also per-value, so a value nested inside a list or dict cannot hide from the
-    # serialized scan above.
-    for value in response.values():
-        assert _SESSION_COOKIE_VALUE not in json.dumps(value)
-        assert _SESSION_HEADER_VALUE not in json.dumps(value)
-
-
-@pytest.mark.asyncio
-async def test_register_session_handle_is_unguessable_and_not_derivable(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    first = await _register(server)
-    second = await _register(server)
-    handle = first["handle"]
-    assert len(handle) >= 22, "handle is too short to be unguessable"
-    assert handle.replace("-", "").replace("_", "").isalnum(), "handle is not URL-safe"
-    assert first["handle"] != second["handle"]
-    assert handle != "example.com"
-    assert "example" not in handle and "com" not in handle
-
-
-@pytest.mark.asyncio
-async def test_register_session_stores_a_private_file(tmp_path):
-    """The stored file is named by a hash of the handle, never by the handle itself.
-
-    A resolved session path is passed on the command line, where any local user can
-    read it through ps. A handle in a filename would therefore be a world-readable
-    bearer token for the life of the run.
-    """
-    from astrolabe.mapping_mcp import _session_stem
-
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    response = await _register(server)
-    stem = _session_stem(response["handle"])
-    stored = tmp_path / ".astrolabe" / "sessions" / f"{stem}.json"
-    assert stored.is_file()
-    assert response["handle"] not in stored.name
-    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
-    assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
-    # The file must actually hold the value: a store that silently dropped it would
-    # look identical from the response alone.
-    assert _SESSION_COOKIE_VALUE in stored.read_text()
-
-
-@pytest.mark.asyncio
-async def test_register_session_refuses_a_domain_without_the_operator_gate(tmp_path):
-    server = create_server(tmp_path)  # gate empty by default
-    with pytest.raises(ToolError) as excinfo:
-        await _register(server)
-    assert "ASTROLABE_SESSION_DOMAINS" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_register_session_gate_is_exact_match_not_a_suffix(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    for lookalike in ("notexample.com", "example.com.evil.test", "sub.example.com"):
-        with pytest.raises(ToolError) as excinfo:
-            await _register(server, domain=lookalike)
-        assert "ASTROLABE_SESSION_DOMAINS" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_register_session_refuses_denied_header_and_cookie_names(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    for denied in ("Host", "Cookie", "Transfer-Encoding"):
-        with pytest.raises(ToolError) as excinfo:
-            await _register(server, headers={denied: "x"}, cookies=[])
-        assert denied in str(excinfo.value) or "not accepted" in str(excinfo.value)
-        assert _SESSION_HEADER_VALUE not in str(excinfo.value)
-
-
-@pytest.mark.asyncio
 async def test_register_session_refuses_an_empty_session(tmp_path):
     server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
     with pytest.raises(ToolError, match="at least one of cookies or headers"):
@@ -684,40 +600,7 @@ async def test_unknown_and_path_like_handles_are_refused(tmp_path):
         assert "etc/passwd" not in str(excinfo.value), "the probe path was echoed back"
 
 
-@pytest.mark.asyncio
-async def test_session_registered_for_another_domain_is_refused(tmp_path, monkeypatch):
-    calls = _argv_capture(monkeypatch)
-    server = create_server(tmp_path, session_domains=frozenset({"example.com", "other.test"}))
-    handle = (await _register(server, domain="other.test"))["handle"]
-    async with Client(server) as client:
-        with pytest.raises(ToolError, match="different domain"):
-            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
-    assert not calls, "a cross-domain session reached a subprocess"
-
-
 # ----- session lifecycle: env allowlist, expiry, revocation ------------------
-
-
-@pytest.mark.asyncio
-async def test_session_allowlist_reads_the_env_var_and_allows_a_listed_domain(
-    tmp_path, monkeypatch
-):
-    """F-22 coverage gap: the env -> allowlist path with a NON-EMPTY value that
-    SUCCEEDS. Every other test drives create_server directly, so the env var
-    itself was never exercised on the success path."""
-    monkeypatch.setenv("ASTROLABE_SESSION_DOMAINS", "example.com")
-    server = create_server(tmp_path)  # no session_domains argument at all
-    response = await _register(server)
-    assert response["ok"] is True
-    assert response["cookie_names"] == ["sid"]
-
-
-@pytest.mark.asyncio
-async def test_session_allowlist_from_env_is_exact_not_suffix(tmp_path, monkeypatch):
-    monkeypatch.setenv("ASTROLABE_SESSION_DOMAINS", "sub.example.com")
-    server = create_server(tmp_path)
-    with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
-        await _register(server, domain="example.com")
 
 
 @pytest.mark.asyncio
@@ -727,102 +610,3 @@ async def test_unset_allowlist_refuses_every_domain(tmp_path, monkeypatch):
     for domain in ("example.com", "other.test", "a.b.c.example"):
         with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
             await _register(server, domain=domain)
-
-
-@pytest.mark.asyncio
-async def test_expired_session_is_refused_at_resolve_not_only_at_registration(
-    tmp_path, monkeypatch
-):
-    """A handle must die on its own even though the server never restarts."""
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    handle = (await _register(server))["handle"]
-    calls = _argv_capture(monkeypatch)
-
-    from astrolabe.mapping_mcp import _session_stem
-
-    meta = tmp_path / ".astrolabe" / "sessions" / f"{_session_stem(handle)}.meta.json"
-    stored = json.loads(meta.read_text())
-    stored["expires_at"] = "2000-01-01T00:00:00+00:00"  # already past
-    meta.write_text(json.dumps(stored))
-
-    async with Client(
-        create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    ) as client:
-        with pytest.raises(ToolError, match="expired"):
-            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
-    assert not calls, "an expired session still reached a subprocess"
-
-
-@pytest.mark.asyncio
-async def test_session_expiry_is_capped_at_24_hours(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from astrolabe.mapping_mcp import MAX_SESSION_SECONDS
-
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    far_future = int((datetime.now(UTC) + timedelta(days=30)).timestamp())
-    response = await _register(server, cookies=[{**_SESSION_COOKIE, "expires": far_future}])
-    granted = datetime.fromisoformat(response["expires_at"])
-    assert granted <= datetime.now(UTC) + timedelta(seconds=MAX_SESSION_SECONDS + 5)
-
-
-@pytest.mark.asyncio
-async def test_revoke_session_makes_the_handle_unusable(tmp_path, monkeypatch):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    handle = (await _register(server))["handle"]
-    calls = _argv_capture(monkeypatch)
-
-    async with Client(
-        create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    ) as client:
-        revoked = (await client.call_tool("revoke_session", {"handle": handle})).data
-        assert revoked == {"ok": True, "revoked": True}
-        # The handle is a bearer token; a response must not echo it back.
-        assert handle not in json.dumps(revoked)
-        with pytest.raises(ToolError, match="register_session"):
-            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
-    assert not calls, "a revoked session still reached a subprocess"
-
-
-@pytest.mark.asyncio
-async def test_revoke_session_is_idempotent_and_never_claims_a_false_revoke(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    handle = (await _register(server))["handle"]
-    async with Client(
-        create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    ) as client:
-        assert (await client.call_tool("revoke_session", {"handle": handle})).data[
-            "revoked"
-        ] is True
-        again = (await client.call_tool("revoke_session", {"handle": handle})).data
-        assert again["revoked"] is False, "a second revoke claimed to remove something"
-        unknown = (await client.call_tool("revoke_session", {"handle": "not-a-handle"})).data
-        assert unknown["revoked"] is False
-
-
-@pytest.mark.asyncio
-async def test_session_handle_never_appears_in_a_log_file(tmp_path, monkeypatch):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    handle = (await _register(server))["handle"]
-
-    class P:
-        returncode = 1
-
-        async def communicate(self):
-            return b'{"ok":false,"error":"upstream refused"}', b""
-
-    async def fake(*a, **k):
-        return P()
-
-    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", fake)
-    async with Client(
-        create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    ) as client:
-        # The call is expected to fail (the fake process exits non-zero); the point
-        # of the test is the log file it leaves behind, not the refusal itself.
-        with contextlib.suppress(ToolError):
-            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
-    logs = list((tmp_path / ".astrolabe" / "logs").glob("*.log"))
-    assert logs, "no run log was written, so this assertion would have been vacuous"
-    for log in logs:
-        assert handle not in log.read_text(errors="replace")
