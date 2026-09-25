@@ -34,9 +34,12 @@ MAPPING_INSTRUCTIONS = (
     "to invoke its read operations."
 )
 
-# Frozen at 799d802, the last commit of the SDK migration. ``chart_status`` was
-# added afterwards by todo 4, which is why this list grew: the migration itself
-# changed nothing here, and that is what this file exists to prove.
+# Frozen at 799d802, the last commit of the SDK migration. ``chart_status`` was added
+# afterwards by todo 4, which is why this list grew: the migration itself changed nothing
+# here, and that is what this file exists to prove.
+#
+# This is the MAPPING server's surface. The unified server adds search_tools and
+# call_tool on top; neither is a mapping tool, so neither belongs in this list.
 MAPPING_TOOL_NAMES = [
     "chart_status",
     "generate_chart",
@@ -47,6 +50,10 @@ MAPPING_TOOL_NAMES = [
     "solve_challenge",
     "verify_chart",
 ]
+
+# The unified server's frozen surface: the mapping tools plus the collapsed pair that
+# replaced the per-Chart tools in todo 5.
+UNIFIED_TOOL_NAMES = sorted([*MAPPING_TOOL_NAMES, "call_tool", "search_tools"])
 
 LIST_CHARTS_KEYS = [
     "agree",
@@ -116,10 +123,13 @@ async def test_mapping_server_tool_names_are_frozen(tmp_path):
 
 async def test_unified_server_without_toolpacks_is_the_mapping_surface(tmp_path):
     async with Client(create_unified_server()) as client:
-        assert sorted(t.name for t in await client.list_tools()) == MAPPING_TOOL_NAMES
+        assert sorted(t.name for t in await client.list_tools()) == UNIFIED_TOOL_NAMES
 
 
 async def test_typed_pack_tool_names_are_frozen(qualcomm_pack, monkeypatch):
+    """Removed from the default surface by todo 5; pinned on the legacy opt-in, which
+    exists precisely so an agent that learned these names can keep using them."""
+    monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
     monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
     async with Client(create_unified_server()) as client:
         names = sorted(t.name for t in await client.list_tools())

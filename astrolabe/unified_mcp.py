@@ -52,9 +52,10 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +200,46 @@ class _Observable(Protocol):
 
 _MAX_INSTRUCTIONS_CHARS = 4096
 
+# The eight tools every typed pack re-advertises. They are the same on every pack, so
+# a workspace pays for them once per chart; the collapsed surface drops them entirely.
+_DISCOVERY_SUFFIXES = frozenset(
+    {
+        "search_operations",
+        "describe_operation",
+        "trace_surface",
+        "diff_contract",
+        "coverage_report",
+        "invoke_query",
+        "verify_operation",
+        "subscribe_events",
+    }
+)
+
+
+def _legacy_direct_tools() -> bool:
+    """Whether to keep the old per-chart tools mounted alongside the collapsed surface.
+
+    Off by default. The collapse removes ``astrolabe_typed_<ns>_<op>`` names, which is
+    breaking for an agent that learned them, so the operator can keep the old names
+    until it has migrated.
+    """
+    return os.environ.get("ASTROLABE_LEGACY_DIRECT_TOOLS") == "1"
+
+
+def _envelope(result: Any) -> dict[str, Any]:
+    """Decode a dispatched tool result's JSON envelope."""
+    for block in getattr(result, "content", []) or []:
+        text = getattr(block, "text", None)
+        if text:
+            try:
+                value = json.loads(text)
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                return value
+    return {"ok": False, "error_code": "BAD_RESULT", "error_detail": "tool returned no envelope"}
+
+
 
 def _compose_instructions(mapping: str | None, contracts: list[str]) -> str | None:
     """Fold every mounted pack's operational contract into the parent's instructions.
@@ -312,6 +353,9 @@ def create_unified_server() -> FastMCP:
         },
     )
 
+    packs: list[tuple[str, FastMCP, str]] = []
+    legacy = _legacy_direct_tools()
+
     for pack_path in _collect_toolpack_paths():
         try:
             typed = _build_typed_server(pack_path)
@@ -331,19 +375,139 @@ def create_unified_server() -> FastMCP:
             continue
 
         try:
-            # ``namespace`` (not the deprecated ``prefix``) is the modern
-            # FastMCP 3.x kwarg; it namespaces tools with ``<namespace>_<name>``
-            # so the canonical form on the wire is ``typed_<domain>_<tool>``.
-            server.mount(typed, namespace=f"typed_{namespace_token}")
+            if legacy:
+                server.mount(typed, namespace=f"typed_{namespace_token}")
         except Exception as exc:  # noqa: BLE001 — surface without crashing server
             skipped.append((str(pack_path), f"mount: {type(exc).__name__}: {exc}"))
             continue
 
         mounted_namespaces.add(namespace_token)
         mounted_packs[f"typed_{namespace_token}"] = str(pack_path)
+        packs.append((namespace_token, typed, str(pack_path)))
         mounted += 1
         if typed.instructions:
             contracts.append(typed.instructions)
+
+    index: dict[str, dict[str, Any]] | None = None
+
+    async def _load_index() -> dict[str, dict[str, Any]]:
+        """Cross-pack map of operation_id -> how to reach it, built once on first use.
+
+        Each pack is asked for its own inventory, which already carries input_schema,
+        so the argument contract has a single source of truth rather than a second
+        copy maintained here.
+        """
+        nonlocal index
+        if index is not None:
+            return index
+        by_namespace = {namespace: typed for namespace, typed, _ in packs}
+        built: dict[str, dict[str, Any]] = {}
+        for namespace, typed in by_namespace.items():
+            try:
+                listing = await typed.get_tool("search_operations")
+                if listing is None:
+                    continue
+                found = await listing.run({})
+            except Exception:  # noqa: BLE001 — a pack that cannot list is simply empty
+                continue
+            for item in _envelope(found).get("operations") or []:
+                if not item.get("invocable"):
+                    continue
+                name = str(item.get("name") or item.get("id") or "")
+                if not name or name in _DISCOVERY_SUFFIXES:
+                    continue
+                # The Chart is part of the id. Two Charts can expose the same operation
+                # name, and disambiguating in the id beats mounting two servers to keep
+                # them apart.
+                built[f"{namespace}__{name}"] = {"namespace": namespace, "tool": name, "item": item}
+        # Sorted so enumeration order is identical across restarts, which keeps the
+        # prompt cache warm and makes a diff of two runs meaningful.
+        index = dict(sorted(built.items()))
+        return index
+
+    async def _dispatch(typed: FastMCP, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        tool = await typed.get_tool(name)
+        if tool is None:
+            return _refusal("OPERATION_NOT_FOUND", f"tool {name!r} is not registered")
+        return _envelope(await tool.run(arguments))
+
+    def _refusal(code: str, detail: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error_code": code,
+            "error_detail": detail,
+            "retryable": False,
+        }
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=True, open_world_hint=False
+        ),
+    )
+    async def search_tools(query: str = "", limit: int = 25) -> dict[str, Any]:
+        """Find callable operations across every mounted Chart.
+
+        Returns each hit's operation_id, Chart, protocol, proof tier and input_schema,
+        so an operation can be called with call_tool without reading anything else.
+        Only operations a Chart actually exposes appear here.
+        """
+        if len(query) > 200:
+            return _refusal("BAD_ARGUMENTS", "query must be at most 200 characters")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            return _refusal("BAD_ARGUMENTS", "limit must be an integer between 1 and 200")
+        needle = query.casefold().strip()
+        hits = []
+        for operation_id, record in (await _load_index()).items():
+            item = record["item"]
+            # The Chart is searchable, not just carried: without it an agent cannot
+            # scope a search to one site among twelve.
+            haystack = " ".join(
+                [operation_id.replace("__", " ")]
+                + [str(item.get(key) or "") for key in ("id", "name", "alias", "operation")]
+            ).casefold()
+            if needle and needle not in haystack:
+                continue
+            hits.append(
+                {
+                    "operation_id": operation_id,
+                    "chart": record["namespace"],
+                    "name": item.get("name"),
+                    "alias": item.get("alias"),
+                    "transport": item.get("transport"),
+                    "protocol": item.get("protocol"),
+                    "proof_tier": item.get("proof_tier"),
+                    "input_schema": item.get("input_schema")
+                    or {"type": "object", "properties": {}},
+                }
+            )
+        return {
+            "ok": True,
+            "count": len(hits),
+            "operations": hits[:limit],
+            "truncated": len(hits) > limit,
+        }
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=True, idempotent_hint=False, open_world_hint=True
+        ),
+    )
+    async def call_tool(
+        operation_id: str, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Invoke one operation by the operation_id search_tools returned.
+
+        Reaches the same execution path the per-Chart tool did, including that Chart's
+        own credential scoping and host validation.
+        """
+        record = (await _load_index()).get(operation_id)
+        if record is None:
+            return _refusal(
+                "OPERATION_NOT_FOUND",
+                f"unknown operation_id {operation_id!r}; run search_tools to list callable operations",
+            )
+        typed = next(typed for namespace, typed, _ in packs if namespace == record["namespace"])
+        return await _dispatch(typed, record["tool"], dict(arguments or {}))
 
     server.instructions = _compose_instructions(server.instructions, contracts)
 

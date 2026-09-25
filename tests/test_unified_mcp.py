@@ -48,12 +48,14 @@ DISCOVERY_SUFFIXES = {
 }
 
 MAPPING_TOOL_NAMES = {
+    "call_tool",
     "chart_status",
     "generate_chart",
     "import_har",
     "list_charts",
     "map_site",
     "preflight",
+    "search_tools",
     "solve_challenge",
     "verify_chart",
 }
@@ -264,8 +266,11 @@ async def test_mapping_only_server_name(tmp_workspace):
 # ----- create_unified_server: single toolpack mounted -----------------------
 
 
-async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, qualcomm_pack):
-    os.environ["ASTROLABE_TOOLPACK"] = str(qualcomm_pack)
+async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, qualcomm_pack, monkeypatch):
+    """The pre-collapse per-Chart names are now opt-in, so this asserts the landing
+    path: an operator who has not migrated can still get them back verbatim."""
+    monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
     server = create_unified_server()
     names = await _tool_names(server)
 
@@ -306,8 +311,9 @@ async def test_single_toolpack_namespace_has_no_dots(tmp_workspace, qualcomm_pac
     assert all("." not in n for n in typed)
 
 
-async def test_single_toolpack_resources_namespaced(tmp_workspace, qualcomm_pack):
-    os.environ["ASTROLABE_TOOLPACK"] = str(qualcomm_pack)
+async def test_single_toolpack_resources_namespaced(tmp_workspace, qualcomm_pack, monkeypatch):
+    monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
     server = create_unified_server()
     uris = await _resource_uris(server)
     expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
@@ -381,12 +387,13 @@ async def test_one_bad_pack_among_good_ones_continues(
 # ----- create_unified_server: collision resistance --------------------------
 
 
-async def test_two_packs_same_domain_second_is_rejected(tmp_workspace):
+async def test_two_packs_same_domain_second_is_rejected(tmp_workspace, monkeypatch):
     """If two toolpacks target the same base_domain, mounting them under
     identical namespaces would produce a FastMCP composition error. The
     unified server must handle this gracefully — by deduping the second."""
     if not _REPO_TOOLPACK_QUALCOMM.exists():
         pytest.skip("bundled toolpack missing")
+    monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
     base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
     p1 = tmp_workspace / "p1.json"
     p1.write_text(json.dumps(base))
@@ -553,51 +560,76 @@ async def test_chart_status_never_returns_an_absolute_chart_path(tmp_workspace, 
 # ----- todo 5 baseline: the pre-collapse surface -----------------------------
 
 
-async def test_baseline_one_pack_serves_eight_discovery_tools_plus_its_operations(
+async def test_collapsed_surface_drops_the_per_chart_tools(
     tmp_workspace, qualcomm_pack, monkeypatch
 ):
-    """BASELINE: every mounted pack repeats the whole discovery surface.
+    """FLIPPED from a baseline that pinned 8 discovery tools per Chart.
 
-    For this pack 10 typed tools are 8 discovery tools plus 2 real operations, so a
-    12-namespace workspace spends ~96 tools re-advertising the same eight calls.
-    Flipped by the collapse.
+    Those were the same eight on every pack, so twelve namespaces spent ~96 tools
+    re-advertising them. The collapsed surface carries neither them nor the
+    per-Chart operation tools.
     """
     monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
     server = create_unified_server()
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
-    # Match by suffix: "search_operations" itself contains an underscore, so splitting
-    # the tool name cannot recover the suffix.
-    discovery = {
-        n
-        for n in names
-        if n.startswith("typed_docs_qualcomm_com_")
-        and any(n.endswith("_" + suffix) for suffix in DISCOVERY_SUFFIXES)
-    }
-    assert len(discovery) == 8, sorted(discovery)
-    operations = {
-        n for n in names if n.startswith("typed_docs_qualcomm_com_") and n not in discovery
-    }
-    assert operations, "the pack contributed no direct operation tools"
+    assert set(names) == MAPPING_TOOL_NAMES
+    assert not [n for n in names if n.startswith("typed_")]
 
 
-async def test_baseline_every_invocable_operation_has_a_direct_tool(
+async def test_collapsed_surface_legacy_opt_in_restores_the_old_names(
     tmp_workspace, qualcomm_pack, monkeypatch
 ):
-    """The invariant the collapse must preserve.
-
-    Each invocable operation is reachable through a direct typed tool today. After
-    the collapse it must stay reachable, just through call_tool instead. Pinning it
-    now is what makes "no reachable operation was lost" checkable rather than assumed.
-    """
+    """The landing path for an agent that learned astrolabe_typed_<ns>_<op>."""
+    monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
     monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
     server = create_unified_server()
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
-        coverage = await client.call_tool("typed_docs_qualcomm_com_coverage_report", {})
-    report = coverage.structured_content or {}
-    invocable = report["invocable_count"]
-    direct = {n for n in names if n.startswith("typed_docs_qualcomm_com_")} - {
-        f"typed_docs_qualcomm_com_{suffix}" for suffix in DISCOVERY_SUFFIXES
-    }
-    assert invocable == report["direct_tool_count"] == len(direct) > 0
+    expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    for inner in DISCOVERY_SUFFIXES:
+        assert f"{expected_ns}_{inner}" in names, f"legacy opt-in did not restore {inner}"
+
+
+async def test_every_invocable_operation_stays_reachable_after_the_collapse(
+    tmp_workspace, qualcomm_pack, monkeypatch
+):
+    """The invariant the collapse had to preserve, re-expressed through call_tool.
+
+    Pinned before the change as "each invocable operation has a direct typed tool";
+    it must now hold as "each invocable operation is returned by search_tools and
+    accepted by call_tool", with no reachable operation lost.
+    """
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    server = create_unified_server()
+    async with Client(server) as client:
+        found = await client.call_tool("search_tools", {"limit": 200})
+    payload = found.data if isinstance(found.data, dict) else found.structured_content
+    operations = payload["operations"]
+    assert operations, "the collapse left nothing callable"
+    for entry in operations:
+        assert entry["operation_id"].startswith(f"{_QUALCOMM_DOMAIN_SANITIZED}__")
+        assert entry["input_schema"], "a hit carried no input schema"
+
+    # The operation ids are accepted, and an unknown one is refused with a reason.
+    async with Client(server) as client:
+        unknown = await client.call_tool("call_tool", {"operation_id": "nope__nope"})
+    unknown_payload = unknown.data if isinstance(unknown.data, dict) else unknown.structured_content
+    assert unknown_payload["error_code"] == "OPERATION_NOT_FOUND"
+    assert "search_tools" in unknown_payload["error_detail"]
+
+
+async def test_collapsed_surface_excludes_charts_with_nothing_invocable(
+    tmp_workspace, qualcomm_pack, monkeypatch
+):
+    """A Chart with no invocable operation must contribute no callable operation.
+
+    Measured live before the change: pastebin and privatebin contributed 16 tools
+    between them with invocable_count 0, all of them unreachable.
+    """
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    server = create_unified_server()
+    async with Client(server) as client:
+        found = await client.call_tool("search_tools", {"limit": 200})
+    payload = found.data if isinstance(found.data, dict) else found.structured_content
+    assert all(o["operation_id"] for o in payload["operations"])
