@@ -37,6 +37,24 @@ CATEGORIES = frozenset(
 MAX_ERROR_CHARS = 600
 
 
+def runtime_module_path() -> Path:
+    """Where the running interpreter actually imported ``astrolabe`` from.
+
+    Derived from ``astrolabe.__file__`` rather than from this module's ``__file__``:
+    the drift this exists to expose is *import-path* drift, where a config string
+    and the code that runs disagree. Reading the config string would pass while
+    the import came from a different checkout.
+    """
+    import astrolabe
+
+    return Path(astrolabe.__file__).resolve()
+
+
+def code_root() -> Path:
+    """The source tree the running interpreter imported ``astrolabe`` from."""
+    return runtime_module_path().parents[1]
+
+
 def default_workspace() -> Path:
     """Charts, logs, and staged credentials live in a data directory, not the CWD."""
     configured = os.environ.get("ASTROLABE_WORKSPACE")
@@ -74,9 +92,11 @@ def create_server(
     *,
     browser_auth_domains: frozenset[str] | None = None,
     cdp_endpoints: frozenset[str] | None = None,
+    toolpack_root: Path | None = None,
 ) -> FastMCP:
     root = (workspace or default_workspace()).resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    toolpacks = Path(toolpack_root).resolve() if toolpack_root is not None else None
     # Operator configuration, never a tool argument. Empty means disabled.
     browser_domains = frozenset(
         normalize_host(d)
@@ -238,8 +258,14 @@ def create_server(
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
     async def list_charts() -> dict:
         """List generated Chart paths without reading credentials or captures."""
+        module_path = runtime_module_path()
+        code = module_path.parents[1]
         return {
             "workspace": str(root),
+            "toolpack_root": str(toolpacks) if toolpacks is not None else None,
+            "code_root": str(code),
+            "runtime_module_path": str(module_path),
+            "agree": toolpacks is None or toolpacks == code,
             "charts": [
                 {"directory": str(path.parent.relative_to(root)), "toolpack": str(path)}
                 for path in sorted(root.glob("*/toolpack.json"))[:200]

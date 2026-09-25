@@ -42,6 +42,7 @@ Repository = "https://github.com/revoydotdev/astrolabe"
 astrolabe = "astrolabe.cli:main"
 astrolabe-mcp = "astrolabe.mcp_server:main_sync"
 astrolabe-mapping-mcp = "astrolabe.mapping_mcp:main"
+astrolabe-unified-mcp = "astrolabe.unified_mcp:main"
 
 [project.optional-dependencies]
 browser-auth = ["cryptography>=43", "secretstorage>=3.3; sys_platform == 'linux'", "publicsuffixlist>=1.0"]
@@ -65,6 +66,9 @@ packages = ["astrolabe"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Treat async test functions as pytest-asyncio tests automatically. Existing
+# tests that explicitly carry ``@pytest.mark.asyncio`` are still valid.
+asyncio_mode = "auto"
 # Measure the whole production package, not a cherry-picked subset.
 addopts = "--cov=astrolabe --cov-fail-under=65 -q"
 

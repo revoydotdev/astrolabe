@@ -1,0 +1,395 @@
+"""Tests for astrolabe.unified_mcp — the unified MCP facade combining the
+mapping_mcp workflow with optional mounted typed toolpack servers.
+
+Every test runs against a freshly-constructed FastMCP server in-process via
+fastmcp.Client. No env vars leak between cases (autouse scrub).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+from pathlib import Path
+
+import pytest
+from fastmcp import Client
+
+from astrolabe.unified_mcp import (
+    _collect_toolpack_paths,
+    _sanitize_namespace,
+    create_unified_server,
+)
+
+# ----- Fixture source data ---------------------------------------------------
+
+# Real toolpacks shipped in the repo copy from a chart directory so the
+# tests exercise the production _validate_pack path. We never mutate the
+# originals on disk.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_CHART_QUALCOMM = _REPO_ROOT / "chart-docs.qualcomm.com-af7e7498ef63"
+_REPO_TOOLPACK_QUALCOMM = _REPO_CHART_QUALCOMM / "toolpack.json"
+
+_QUALCOMM_DOMAIN_RAW = "docs.qualcomm.com"
+_QUALCOMM_DOMAIN_SANITIZED = "docs_qualcomm_com"
+
+MAPPING_TOOL_NAMES = {
+    "generate_chart",
+    "import_har",
+    "list_charts",
+    "map_site",
+    "preflight",
+    "solve_challenge",
+    "verify_chart",
+}
+
+
+# ----- Helpers ---------------------------------------------------------------
+
+
+async def _tool_names(server) -> list[str]:
+    async with Client(server) as client:
+        tools = await client.list_tools()
+    return sorted(t.name for t in tools)
+
+
+async def _resource_uris(server) -> list[str]:
+    async with Client(server) as client:
+        res = await client.list_resources()
+    return sorted(str(r.uri) for r in res)
+
+
+async def _resource_template_uris(server) -> list[str]:
+    async with Client(server) as client:
+        tmpls = await client.list_resource_templates()
+    return sorted(r.uri_template for r in tmpls)
+
+
+# ----- Fixtures --------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _scrub_astrolabe_env(monkeypatch):
+    """Wipe every ASTROLABE_* variable before each test so cases don't leak."""
+    for k in list(os.environ):
+        if k.startswith("ASTROLABE_"):
+            monkeypatch.delenv(k, raising=False)
+    yield
+
+
+@pytest.fixture
+def tmp_workspace(monkeypatch, tmp_path):
+    """Redirect the mapping MCP's default workspace into tmp_path so the
+    side-effecting workspace mkdir() in create_server doesn't touch ~."""
+    workspace = tmp_path / "astrolabe"
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ASTROLABE_WORKSPACE", str(workspace))
+    return workspace
+
+
+@pytest.fixture
+def qualcomm_pack(tmp_path) -> Path:
+    """Deep-copy of the bundled qualcomm toolpack into tmp_path."""
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    target = tmp_path / "qualcomm.json"
+    shutil.copyfile(_REPO_TOOLPACK_QUALCOMM, target)
+    return target
+
+
+@pytest.fixture
+def two_distinct_packs(tmp_path) -> tuple[Path, Path]:
+    """Two *distinct* toolpacks derived from the qualcomm pack by mutating
+    only base_domain so both pass _validate_pack independently."""
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
+    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    a = dict(base)
+    a["base_domain"] = "a.example.test"
+    b = dict(base)
+    b["base_domain"] = "b.example.test"
+    pa = tmp_path / "a.json"
+    pa.write_text(json.dumps(a))
+    pb = tmp_path / "b.json"
+    pb.write_text(json.dumps(b))
+    return pa, pb
+
+
+@pytest.fixture
+def bad_toolpack(tmp_path) -> Path:
+    """A file that exists but is not a valid toolpack — should be skipped."""
+    p = tmp_path / "garbage.json"
+    p.write_text(json.dumps({"this": "is not a valid toolpack"}))
+    return p
+
+
+# ----- _sanitize_namespace ---------------------------------------------------
+
+
+def test_sanitize_replaces_dots_with_underscores():
+    assert _sanitize_namespace("docs.qualcomm.com") == "docs_qualcomm_com"
+
+
+def test_sanitize_idempotent_on_already_clean_string():
+    assert _sanitize_namespace("a_b_c") == "a_b_c"
+
+
+def test_sanitize_handles_trailing_and_leading_dots():
+    assert _sanitize_namespace(".foo.bar.") == "foo_bar"
+
+
+# ----- _collect_toolpack_paths ----------------------------------------------
+
+
+def test_collect_empty_when_no_env():
+    assert _collect_toolpack_paths() == []
+
+
+def test_collect_single_via_astrolabe_toolpack(tmp_path):
+    p = tmp_path / "one.json"
+    p.write_text("{}")
+    os.environ["ASTROLABE_TOOLPACK"] = str(p)
+    assert _collect_toolpack_paths() == [p]
+
+
+def test_collect_csv_via_astrolabe_toolpacks(tmp_path):
+    a = tmp_path / "a.json"
+    a.write_text("{}")
+    b = tmp_path / "b.json"
+    b.write_text("{}")
+    os.environ["ASTROLABE_TOOLPACKS"] = f"{a},{b}"
+    assert _collect_toolpack_paths() == [a, b]
+
+
+def test_collect_directory_globs_json_only(tmp_path):
+    d = tmp_path / "packs"
+    d.mkdir()
+    for n in ("alpha.json", "beta.json", "schema.json"):
+        (d / n).write_text("{}")
+    (d / "ignore.txt").write_text("not a json")
+    # json files inside the directory are returned in lexicographic order
+    os.environ["ASTROLABE_TOOLPACKS"] = str(d)
+    result = _collect_toolpack_paths()
+    assert {p.name for p in result} == {"alpha.json", "beta.json", "schema.json"}
+    assert [p.name for p in result] == sorted([p.name for p in result])
+
+
+def test_collect_skips_missing_paths_in_csv(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text("{}")
+    ghost = tmp_path / "ghost.json"  # never created
+    os.environ["ASTROLABE_TOOLPACKS"] = f"{real},{ghost}"
+    assert _collect_toolpack_paths() == [real]
+
+
+def test_collect_both_single_and_plural_de_duped(tmp_path):
+    a = tmp_path / "a.json"
+    a.write_text("{}")
+    b = tmp_path / "b.json"
+    b.write_text("{}")
+    os.environ["ASTROLABE_TOOLPACK"] = str(a)
+    os.environ["ASTROLABE_TOOLPACKS"] = str(b)
+    # single wins listing order, plural appends
+    assert _collect_toolpack_paths() == [a, b]
+
+
+def test_collect_singular_path_must_exist(tmp_path):
+    """ASTROLABE_TOOLPACK referencing a missing file is silently ignored (parity
+    with the directory-glob behavior)."""
+    ghost = tmp_path / "nope.json"
+    os.environ["ASTROLABE_TOOLPACK"] = str(ghost)
+    assert _collect_toolpack_paths() == []
+
+
+def test_collect_directory_also_recurses_for_toolpack_json(tmp_path):
+    """Repo-style layout: toolpacks live at ``<root>/chart-*/toolpack.json``,
+    one level deep. The directory case must pick them up, alongside any flat
+    ``*.json`` files at the root."""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    chart_dir = root / "chart-example.test-1234"
+    chart_dir.mkdir()
+    real_toolpack = chart_dir / "toolpack.json"
+    real_toolpack.write_text(json.dumps({"base_domain": "example.test", "version": 2, "tools": []}))
+
+    # Noise at the root: not a toolpack.
+    (root / "config.json").write_text("{}")
+    # Noise inside the chart dir: adjacent capture artifacts.
+    (chart_dir / "contract.json").write_text("{}")
+    (chart_dir / "endpoints.json").write_text("{}")
+
+    os.environ["ASTROLABE_TOOLPACKS"] = str(root)
+    result = _collect_toolpack_paths()
+    assert real_toolpack in result
+    names = [p.name for p in result]
+    assert names.count("toolpack.json") == 1
+    # The flat config.json at the root IS picked up by the *.json glob;
+    # the chart-internal contract.json and endpoints.json are deeper than
+    # one level so they are not picked up by *.json (only toolpack.json
+    # recurses). That's intentional: contract/endpoints are not full packs.
+    assert (root / "config.json") in result
+
+
+# ----- create_unified_server: mapping-only mode -----------------------------
+
+
+async def test_mapping_only_exposes_full_mapping_surface(tmp_workspace):
+    server = create_unified_server()
+    names = await _tool_names(server)
+    assert set(names) >= MAPPING_TOOL_NAMES  # exactly the set
+    assert set(names) == MAPPING_TOOL_NAMES
+    assert await _resource_uris(server) == []
+
+
+async def test_mapping_only_server_name(tmp_workspace):
+    server = create_unified_server()
+    assert server.name == "astrolabe"
+
+
+# ----- create_unified_server: single toolpack mounted -----------------------
+
+
+async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, qualcomm_pack):
+    os.environ["ASTROLABE_TOOLPACK"] = str(qualcomm_pack)
+    server = create_unified_server()
+    names = await _tool_names(server)
+
+    # Mapping tools unchanged
+    assert set(names) >= MAPPING_TOOL_NAMES
+
+    # Exactly one typed-pack namespace mounted, with the sanitized domain
+    expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    assert server.unified_namespaces == {expected_ns}
+
+    # Every typed tool appears once with the namespaced name
+    typed_names = [n for n in names if n.startswith(expected_ns + "_")]
+    assert typed_names, f"no namespaced tools: {names}"
+    assert len(typed_names) == len(set(typed_names)), "duplicate tool names"
+
+    # The qualcomm pack carries these tools (verified earlier):
+    expected_inner = {
+        "coverage_report",
+        "describe_operation",
+        "diff_contract",
+        "invoke_query",
+        "search_operations",
+        "subscribe_events",
+        "trace_surface",
+        "verify_operation",
+    }
+    for inner in expected_inner:
+        assert f"{expected_ns}_{inner}" in names, f"missing {expected_ns}_{inner}"
+
+
+async def test_single_toolpack_namespace_has_no_dots(tmp_workspace, qualcomm_pack):
+    """FastMCP rejects namespaces that contain dots; the implementation must
+    sanitize so consumers never see ``typed_docs.qualcomm.com_tool``."""
+    os.environ["ASTROLABE_TOOLPACK"] = str(qualcomm_pack)
+    server = create_unified_server()
+    names = await _tool_names(server)
+    typed = [n for n in names if n.startswith("typed_")]
+    assert all("." not in n for n in typed)
+
+
+async def test_single_toolpack_resources_namespaced(tmp_workspace, qualcomm_pack):
+    os.environ["ASTROLABE_TOOLPACK"] = str(qualcomm_pack)
+    server = create_unified_server()
+    uris = await _resource_uris(server)
+    expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    # FastMCP namespaced the URIs to ``astrolabe://<ns>/<original>``
+    assert any(expected_ns in u and u.endswith("/manifest") for u in uris)
+    assert any(expected_ns in u and u.endswith("/health") for u in uris)
+
+
+# ----- create_unified_server: ASTROLABE_TOOLPACKS dir + csv -----------------
+
+
+async def test_toolpacks_dir_mounts_each(tmp_workspace, two_distinct_packs):
+    pa, pb = two_distinct_packs
+    pack_dir = pa.parent
+    os.environ["ASTROLABE_TOOLPACKS"] = str(pack_dir)
+    server = create_unified_server()
+    names = await _tool_names(server)
+
+    # Both packs mount — distinct sanitized domains appear in unified_namespaces
+    assert {"typed_a_example_test", "typed_b_example_test"} <= server.unified_namespaces
+    # mapping tools still present
+    assert set(names) >= MAPPING_TOOL_NAMES
+
+
+async def test_toolpacks_csv_mounts_each(tmp_workspace, two_distinct_packs):
+    pa, pb = two_distinct_packs
+    os.environ["ASTROLABE_TOOLPACKS"] = f"{pa},{pb}"
+    server = create_unified_server()
+    assert {"typed_a_example_test", "typed_b_example_test"} <= server.unified_namespaces
+
+
+# ----- create_unified_server: skip behaviour --------------------------------
+
+
+async def test_bad_toolpack_is_skipped_and_warning_emitted(tmp_workspace, bad_toolpack, capsys):
+    os.environ["ASTROLABE_TOOLPACK"] = str(bad_toolpack)
+    server = create_unified_server()
+    # Mapping tools still served
+    names = await _tool_names(server)
+    assert set(names) >= MAPPING_TOOL_NAMES
+
+    err = capsys.readouterr().err
+    assert "astrolabe-unified" in err or "skipped" in err
+    assert str(bad_toolpack) in err
+
+
+async def test_missing_toolpack_does_not_crash(tmp_workspace):
+    """A path that points at a non-existent file under ASTROLABE_TOOLPACK is
+    silently dropped (parity with the ASTROLABE_TOOLPACKS csv case)."""
+    os.environ["ASTROLABE_TOOLPACK"] = str(tmp_workspace / "no.such.file.json")
+    server = create_unified_server()
+    names = await _tool_names(server)
+    assert set(names) >= MAPPING_TOOL_NAMES
+
+
+async def test_one_bad_pack_among_good_ones_continues(
+    tmp_workspace, two_distinct_packs, bad_toolpack
+):
+    pa, pb = two_distinct_packs
+    os.environ["ASTROLABE_TOOLPACKS"] = f"{pa},{bad_toolpack},{pb}"
+    server = create_unified_server()
+    names = await _tool_names(server)
+
+    assert {"typed_a_example_test", "typed_b_example_test"} <= server.unified_namespaces
+    assert len([n for n in names if n in MAPPING_TOOL_NAMES]) == len(MAPPING_TOOL_NAMES)
+    assert server.unified_skipped, "expected at least one skipped entry"
+    skip_paths = {p for p, _ in server.unified_skipped}
+    assert str(bad_toolpack) in skip_paths
+
+
+# ----- create_unified_server: collision resistance --------------------------
+
+
+async def test_two_packs_same_domain_second_is_rejected(tmp_workspace):
+    """If two toolpacks target the same base_domain, mounting them under
+    identical namespaces would produce a FastMCP composition error. The
+    unified server must handle this gracefully — by deduping the second."""
+    if not _REPO_TOOLPACK_QUALCOMM.exists():
+        pytest.skip("bundled toolpack missing")
+    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    p1 = tmp_workspace / "p1.json"
+    p1.write_text(json.dumps(base))
+    p2 = tmp_workspace / "p2.json"
+    p2.write_text(json.dumps(base))
+    os.environ["ASTROLABE_TOOLPACKS"] = f"{p1},{p2}"
+    server = create_unified_server()
+    names = await _tool_names(server)
+
+    # Exactly one qualcomm namespace mounted (the second pack was skipped)
+    assert server.unified_namespaces == {f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"}
+    # No duplicate tool names anywhere
+    typed = [n for n in names if n.startswith("typed_")]
+    counts = {n: names.count(n) for n in typed}
+    assert all(c == 1 for c in counts.values()), f"duplicate tool names: {counts}"
+    # And the qualcomm pack's tool appears (one canonical copy)
+    qualcomm_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    assert f"{qualcomm_ns}_invoke_query" in names
+    # The skip was recorded with the collision reason
+    skip_paths = {p for p, _ in server.unified_skipped}
+    assert str(p2) in skip_paths
