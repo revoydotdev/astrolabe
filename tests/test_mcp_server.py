@@ -793,7 +793,7 @@ async def test_fastmcp_lists_tools_resources_and_prompt(
         "astrolabe://manifest",
         "astrolabe://health",
     }
-    assert any(str(template.uriTemplate) == "astrolabe://tools/{name}" for template in templates)
+    assert any(str(template.uri_template) == "astrolabe://tools/{name}" for template in templates)
     assert [prompt.name for prompt in prompts] == ["use_astrolabe"]
 
 
