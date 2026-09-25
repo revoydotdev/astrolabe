@@ -49,6 +49,7 @@ MAPPING_TOOL_NAMES = [
     "map_site",
     "preflight",
     "register_session",
+    "revoke_session",
     "solve_challenge",
     "verify_chart",
 ]

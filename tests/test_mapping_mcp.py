@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import stat
@@ -692,3 +693,136 @@ async def test_session_registered_for_another_domain_is_refused(tmp_path, monkey
         with pytest.raises(ToolError, match="different domain"):
             await client.call_tool("map_site", {"domain": "example.com", "session": handle})
     assert not calls, "a cross-domain session reached a subprocess"
+
+
+# ----- session lifecycle: env allowlist, expiry, revocation ------------------
+
+
+@pytest.mark.asyncio
+async def test_session_allowlist_reads_the_env_var_and_allows_a_listed_domain(
+    tmp_path, monkeypatch
+):
+    """F-22 coverage gap: the env -> allowlist path with a NON-EMPTY value that
+    SUCCEEDS. Every other test drives create_server directly, so the env var
+    itself was never exercised on the success path."""
+    monkeypatch.setenv("ASTROLABE_SESSION_DOMAINS", "example.com")
+    server = create_server(tmp_path)  # no session_domains argument at all
+    response = await _register(server)
+    assert response["ok"] is True
+    assert response["cookie_names"] == ["sid"]
+
+
+@pytest.mark.asyncio
+async def test_session_allowlist_from_env_is_exact_not_suffix(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASTROLABE_SESSION_DOMAINS", "sub.example.com")
+    server = create_server(tmp_path)
+    with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
+        await _register(server, domain="example.com")
+
+
+@pytest.mark.asyncio
+async def test_unset_allowlist_refuses_every_domain(tmp_path, monkeypatch):
+    monkeypatch.delenv("ASTROLABE_SESSION_DOMAINS", raising=False)
+    server = create_server(tmp_path)
+    for domain in ("example.com", "other.test", "a.b.c.example"):
+        with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
+            await _register(server, domain=domain)
+
+
+@pytest.mark.asyncio
+async def test_expired_session_is_refused_at_resolve_not_only_at_registration(
+    tmp_path, monkeypatch
+):
+    """A handle must die on its own even though the server never restarts."""
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    handle = (await _register(server))["handle"]
+    calls = _argv_capture(monkeypatch)
+
+    from astrolabe.mapping_mcp import _session_stem
+
+    meta = tmp_path / ".astrolabe" / "sessions" / f"{_session_stem(handle)}.meta.json"
+    stored = json.loads(meta.read_text())
+    stored["expires_at"] = "2000-01-01T00:00:00+00:00"  # already past
+    meta.write_text(json.dumps(stored))
+
+    async with Client(
+        create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    ) as client:
+        with pytest.raises(ToolError, match="expired"):
+            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
+    assert not calls, "an expired session still reached a subprocess"
+
+
+@pytest.mark.asyncio
+async def test_session_expiry_is_capped_at_24_hours(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from astrolabe.mapping_mcp import MAX_SESSION_SECONDS
+
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    far_future = int((datetime.now(UTC) + timedelta(days=30)).timestamp())
+    response = await _register(server, cookies=[{**_SESSION_COOKIE, "expires": far_future}])
+    granted = datetime.fromisoformat(response["expires_at"])
+    assert granted <= datetime.now(UTC) + timedelta(seconds=MAX_SESSION_SECONDS + 5)
+
+
+@pytest.mark.asyncio
+async def test_revoke_session_makes_the_handle_unusable(tmp_path, monkeypatch):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    handle = (await _register(server))["handle"]
+    calls = _argv_capture(monkeypatch)
+
+    async with Client(
+        create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    ) as client:
+        revoked = (await client.call_tool("revoke_session", {"handle": handle})).data
+        assert revoked == {"ok": True, "revoked": True}
+        # The handle is a bearer token; a response must not echo it back.
+        assert handle not in json.dumps(revoked)
+        with pytest.raises(ToolError, match="register_session"):
+            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
+    assert not calls, "a revoked session still reached a subprocess"
+
+
+@pytest.mark.asyncio
+async def test_revoke_session_is_idempotent_and_never_claims_a_false_revoke(tmp_path):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    handle = (await _register(server))["handle"]
+    async with Client(
+        create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    ) as client:
+        assert (await client.call_tool("revoke_session", {"handle": handle})).data[
+            "revoked"
+        ] is True
+        again = (await client.call_tool("revoke_session", {"handle": handle})).data
+        assert again["revoked"] is False, "a second revoke claimed to remove something"
+        unknown = (await client.call_tool("revoke_session", {"handle": "not-a-handle"})).data
+        assert unknown["revoked"] is False
+
+
+@pytest.mark.asyncio
+async def test_session_handle_never_appears_in_a_log_file(tmp_path, monkeypatch):
+    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    handle = (await _register(server))["handle"]
+
+    class P:
+        returncode = 1
+
+        async def communicate(self):
+            return b'{"ok":false,"error":"upstream refused"}', b""
+
+    async def fake(*a, **k):
+        return P()
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", fake)
+    async with Client(
+        create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    ) as client:
+        # The call is expected to fail (the fake process exits non-zero); the point
+        # of the test is the log file it leaves behind, not the refusal itself.
+        with contextlib.suppress(ToolError):
+            await client.call_tool("map_site", {"domain": "example.com", "session": handle})
+    logs = list((tmp_path / ".astrolabe" / "logs").glob("*.log"))
+    assert logs, "no run log was written, so this assertion would have been vacuous"
+    for log in logs:
+        assert handle not in log.read_text(errors="replace")

@@ -47,6 +47,10 @@ MAX_ERROR_CHARS = 600
 MAX_SESSION_VALUE_CHARS = 8192
 MAX_SESSION_BYTES = 256 * 1024
 SESSION_TTL_SECONDS = 3600
+# A ceiling regardless of what a cookie claims. An agent-originated credential is a
+# different trust relationship from an operator-staged file, so its lifetime is
+# bounded by us rather than inherited from whatever the site sent.
+MAX_SESSION_SECONDS = 24 * 60 * 60
 # A label is free text the agent supplies and that we store, so it is constrained to a
 # charset with no markup and a hard length; it is never rendered into a tool description.
 _LABEL_OK = re.compile(r"[A-Za-z0-9 _.-]{1,64}")
@@ -218,6 +222,20 @@ def create_server(
         if str(meta.get("domain") or "") != host:
             raise ValueError(
                 "session was registered for a different domain; register one for this host"
+            )
+        # Expiry is re-checked here on every resolve, not only at registration: a
+        # handle that outlives its deadline must die on its own even though the
+        # server that minted it never restarts.
+        raw_expiry = str(meta.get("expires_at") or "")
+        try:
+            deadline = datetime.fromisoformat(raw_expiry)
+        except ValueError as exc:
+            raise ValueError("session metadata carries no readable expiry") from exc
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if datetime.now(UTC) >= deadline:
+            raise ValueError(
+                "session has expired; register a new one with register_session"
             )
         return resolved
 
@@ -473,11 +491,15 @@ def create_server(
             for cookie in cookies or []
             if isinstance(cookie.get("expires"), (int, float)) and cookie["expires"] > 0
         ]
-        expires_at = (
+        ceiling = now + timedelta(seconds=MAX_SESSION_SECONDS)
+        requested = (
             datetime.fromtimestamp(max(lifetimes), UTC)
             if lifetimes
             else now + timedelta(seconds=SESSION_TTL_SECONDS)
         )
+        # Clamped, and the effective value is returned below, so the ceiling is
+        # visible to the caller rather than applied silently.
+        expires_at = min(requested, ceiling)
         record = {
             "version": 1,
             "domain": host,
@@ -515,11 +537,42 @@ def create_server(
                 "cookie_names": sorted(cookie_names),
                 "header_names": sorted(header_names),
                 "expires_at": record["expires_at"],
-                "fingerprint": hashlib.sha256(
-                    (host + "\n" + "\n".join(sorted(cookie_names + header_names))).encode()
-                ).hexdigest()[:16],
+                # Derived from the handle, not the domain: its purpose is to let an
+                # operator correlate a handle seen in a log without the handle itself
+                # appearing. The handle is 256 bits of CSPRNG output, so this digest
+                # is not invertible and needs no separate salt file to be safe.
+                "fingerprint": hashlib.sha256(handle.encode()).hexdigest()[:16],
             }
         )
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=True, open_world_hint=False
+        )
+    )
+    @_refusals
+    async def revoke_session(handle: str | None = None) -> dict:
+        """Revoke a registered session so its handle stops working.
+
+        Takes effect on the next use of the handle. The handle is not echoed back:
+        it is a bearer token, and a response is something a transcript may record.
+        """
+        if not handle:
+            raise ValueError("handle is required; it is the value register_session returned")
+        sessions = (root / ".astrolabe" / "sessions").resolve()
+        removed = 0
+        for suffix in (".json", ".meta.json"):
+            target = sessions / f"{_session_stem(handle)}{suffix}"
+            # The stem is a hex digest so a separator cannot appear in it, but
+            # containment is still re-checked rather than trusted by construction.
+            if not target.resolve().is_relative_to(sessions):
+                continue
+            # Path.unlink() returns None, so existence is tested first: counting on
+            # its return value would report revoked=False for every handle.
+            if target.exists():
+                target.unlink()
+                removed += 1
+        return {"ok": True, "revoked": removed > 0}
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals

@@ -35,6 +35,35 @@ Use a dedicated OS user/browser profile, encrypted swap or disabled swap, and
 short-lived sessions when stronger isolation is needed. A writable source checkout
 is not a security boundary against an agent that can modify it.
 
+## Agent-held sessions
+
+`register_session` lets an agent store a session it already holds and spend it
+via `map_site(domain=..., session=<handle>)` or `verify_chart`. This is a
+different trust relationship from an operator-staged cookie file, because the
+*agent* decides when a secret enters the system. It is gated accordingly.
+
+The gate mirrors the browser-auth boundary above: `ASTROLABE_SESSION_DOMAINS`
+lists exact domains, the default allowlist is empty, and no tool argument can
+widen it. A registration or a use for an unlisted domain is refused by exact
+normalised match, so `sub.example.com` does not permit `example.com`.
+
+A handle is 256 bits of `secrets` output. It is never used as a filename and
+never passed on a command line: the resolved path is derived from a SHA-256 of
+the handle, because argv is world-readable through `ps` and a path containing
+the handle would be a bearer token for the life of the run. The handle is not
+echoed by `revoke_session`, and it is not written to any run log.
+
+Lifetimes are bounded rather than inherited: one hour by default and never more
+than 24 hours, even when a cookie claims a longer life. Expiry is re-checked on
+every resolve, not only at registration, so a leaked handle dies on its own
+without the server restarting. `revoke_session` removes it immediately.
+
+Newly in scope, beyond the concessions already recorded above: the agent's own
+transcript. The handle is returned to the agent, so wherever that transcript is
+retained, a bearer token is retained with it. The same-user-code, process-memory
+and SIGKILL caveats above apply unchanged; what is new is that the caller of
+this tool may itself be the thing holding the secret.
+
 ## Recovery evidence
 
 The capture inspects HTTPS JavaScript responses already loaded by an authorized
