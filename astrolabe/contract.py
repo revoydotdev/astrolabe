@@ -292,13 +292,20 @@ def upgrade(contract):
     return contract
 
 
+# Consecutive merges that must miss an operation before its active proof is dropped.
+# One miss is weak evidence -- a capture may simply not have visited that surface -- while
+# two in a row means nothing observed supports the claim any more.
+UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY = 2
+
+
 def classify(op):
     if op.get("lifecycle_status") not in (None, "current"):
         return "historical"
-    a = op["proof"].get("active")
+    proof = op.get("proof") or {}
+    a = proof.get("active")
     if a and a.get("ok"):
         return "verified-active"
-    if op["proof"]["observed"]["ok"]:
+    if (proof.get("observed") or {}).get("ok"):
         return "verified-observed"
     if op.get("input_schema") or op.get("return_schema"):
         return "typed-unproven"
@@ -316,6 +323,12 @@ def merge(prior, cur):
         return cur, {"added": list(cur["operations"]), "removed": [], "changed": [], "breaking": []}
     prior = upgrade(prior)
     out = {**cur, "operations": dict(prior["operations"])}
+    # Operations were unioned but the rest of the record was last-writer-wins, so an
+    # endpoint or auth header seen only in an earlier run vanished the moment the run
+    # that had it stopped seeing it -- while its operations survived. Union them too.
+    for fld in ("endpoints", "auth_headers"):
+        seen = list(cur.get(fld) or [])
+        out[fld] = list(dict.fromkeys([*seen, *(prior.get(fld) or [])]))
     added, changed, breaking = [], [], []
     pri, curr = prior["operations"], cur["operations"]
     for k, co in curr.items():
@@ -387,6 +400,25 @@ def merge(prior, cur):
         }
         merged["status"] = classify(merged)
         out["operations"][k] = merged
+
+    # A prior-only operation keeps its operations entry but was never re-classified, so
+    # `verified-active` survived indefinitely with nothing observed behind it. Count the
+    # runs that have missed it and drop the active proof once that exceeds
+    # UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY.
+    for key in [k for k in pri if k not in curr]:
+        merged = dict(out["operations"][key])
+        proof = dict(merged.get("proof") or {})
+        misses = int(proof.get("runs_unobserved") or 0) + 1
+        proof["runs_unobserved"] = misses
+        if misses >= UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY and (proof.get("active") or {}).get("ok"):
+            # Kept in active_history so the proof of what did happen is not lost; only
+            # the current claim stops being made.
+            proof["active"] = None
+            proof["active_decayed"] = True
+        merged["proof"] = proof
+        merged["status"] = classify(merged)
+        out["operations"][key] = merged
+
     removed = [k for k in pri if k not in curr]  # present before, not seen now (possible drift)
     return out, {
         "added": added,
@@ -469,10 +501,14 @@ def _coverage_of(ops):
     n = len(ops)
     return {
         "total": n,
-        "typed_input": sum(1 for o in ops if (o["input_schema"] or {}).get("properties")),
+        "typed_input": sum(1 for o in ops if (o.get("input_schema") or {}).get("properties")),
         "typed_return": sum(1 for o in ops if o.get("return_schema")),
-        "verified_observed": sum(1 for o in ops if o["proof"]["observed"]["ok"]),
-        "verified_active": sum(1 for o in ops if (o["proof"].get("active") or {}).get("ok")),
+        "verified_observed": sum(
+            1 for o in ops if ((o.get("proof") or {}).get("observed") or {}).get("ok")
+        ),
+        "verified_active": sum(
+            1 for o in ops if ((o.get("proof") or {}).get("active") or {}).get("ok")
+        ),
     }
 
 
@@ -523,7 +559,11 @@ def render_md(contract, drift=None):
             f"- added: {', '.join('`' + x + '`' for x in drift['added']) or '—'}",
             f"- removed (not seen this run): {', '.join('`' + x + '`' for x in drift['removed']) or '—'}",
             f"- return-schema changed: {', '.join('`' + x + '`' for x in drift['changed']) or '—'}",
-            f"- **breaking** (field removed or retyped): "
+            # The union deliberately keeps a field a prior run saw even when this run
+            # did not, so "breaking" describes the schema CHANGE, not the field's absence
+            # from the table above. Saying so prevents the two reading as a contradiction.
+            f"- **breaking** (field removed or retyped last run; the tables above keep the "
+            f"union of both schemas, so the field is still typed): "
             f"{', '.join('`' + x + '`' for x in drift.get('breaking') or []) or '—'}",
             "",
         ]
@@ -533,7 +573,7 @@ def render_md(contract, drift=None):
         "|---|---|---|---|---|---|",
     ]
     for k, o in sorted(contract["operations"].items()):
-        imported = (o["proof"].get("observed") or {}).get("source") == "har-import"
+        imported = (((o.get("proof") or {}).get("observed") or {}).get("source") == "har-import")
         st = {
             "verified-active": "✅ active",
             "verified-observed": "🟢 imported" if imported else "🟢 observed",
@@ -541,7 +581,7 @@ def render_md(contract, drift=None):
             "listed": "⚪ listed",
             "historical": "◌ historical",
         }.get(o["status"], o["status"])
-        ins = "✓" if (o["input_schema"] or {}).get("properties") else "—"
+        ins = "✓" if (o.get("input_schema") or {}).get("properties") else "—"
         rets = "✓" if o.get("return_schema") else "—"
         transport = o.get("transport") or "graphql"
         L.append(f"| `{k}` | {o['type']} | {transport} | {st} | {ins} | {rets} |")
