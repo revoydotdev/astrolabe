@@ -255,7 +255,7 @@ def create_server(
             arguments += ["--read-pattern", read_pattern]
         return arguments
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+    @server.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
     async def list_charts() -> dict:
         """List generated Chart paths without reading credentials or captures."""
         module_path = runtime_module_path()
@@ -273,12 +273,12 @@ def create_server(
             ],
         }
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
+    @server.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
     async def preflight() -> dict:
         """Check this installation's local capture services and egress readiness."""
         return await run(["preflight", "--local"], 180, "preflight")
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    @server.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False))
     @_refusals
     async def generate_chart(
         capture_directory: str,
@@ -298,7 +298,7 @@ def create_server(
             result["toolpack"] = str(path / "toolpack.json")
         return result
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=True))
+    @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals
     async def solve_challenge(url: str, timeout_seconds: int = 60) -> dict:
         """Solve an anti-bot challenge with Byparr and stage its cookies privately.
@@ -343,9 +343,9 @@ def create_server(
 
     @server.tool(
         annotations=ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            openWorldHint=True,
+            read_only_hint=False,
+            destructive_hint=False,
+            open_world_hint=True,
         )
     )
     @_refusals
@@ -482,7 +482,7 @@ def create_server(
                 result["toolpack"] = str(destination / "toolpack.json")
         return result
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=False))
+    @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=False))
     @_refusals
     async def import_har(
         har_file: str,
@@ -518,7 +518,7 @@ def create_server(
                 result["toolpack"] = str(destination / "toolpack.json")
         return result
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, openWorldHint=True))
+    @server.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
     @_refusals
     async def verify_chart(
         capture_directory: str,

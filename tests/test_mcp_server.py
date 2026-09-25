@@ -787,8 +787,8 @@ async def test_fastmcp_lists_tools_resources_and_prompt(
 
     assert {tool.name for tool in tools} == {"jobSearch", *DISCOVERY_TOOLS}
     direct = _named_tool(tools, "jobSearch")
-    assert direct.annotations.readOnlyHint is True
-    assert direct.annotations.idempotentHint is True
+    assert direct.annotations.read_only_hint is True
+    assert direct.annotations.idempotent_hint is True
     assert {str(resource.uri) for resource in resources} >= {
         "astrolabe://manifest",
         "astrolabe://health",
@@ -1224,7 +1224,7 @@ async def test_rest_tools_are_listed_with_transport_metadata(tmp_path, rest_pack
         tools = await client.list_tools()
         manifest = json.loads((await client.read_resource("astrolabe://manifest"))[0].text)
     assert {t.name for t in tools} == {"getProduct", *DISCOVERY_TOOLS}
-    assert _named_tool(tools, "getProduct").annotations.readOnlyHint is True
+    assert _named_tool(tools, "getProduct").annotations.read_only_hint is True
     assert (
         next(item for item in manifest["tools"] if item["name"] == "getProduct")["transport"]
         == "rest"
@@ -1303,7 +1303,7 @@ async def test_generated_output_schema_is_advertised(tmp_path, pack) -> None:
     async with Client(server) as client:
         tools = await client.list_tools()
         manifest = json.loads((await client.read_resource("astrolabe://manifest"))[0].text)
-    assert _named_tool(tools, "jobSearch").outputSchema["properties"]["data"]["properties"][
+    assert _named_tool(tools, "jobSearch").output_schema["properties"]["data"]["properties"][
         "title"
     ] == {"type": "string"}
     assert (
@@ -1319,7 +1319,7 @@ async def test_output_schema_falls_back_to_open_object(tmp_path, pack) -> None:
     server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         tools = await client.list_tools()
-    assert _named_tool(tools, "jobSearch").outputSchema == {
+    assert _named_tool(tools, "jobSearch").output_schema == {
         "type": "object",
         "additionalProperties": True,
     }
@@ -1329,12 +1329,22 @@ async def test_output_schema_falls_back_to_open_object(tmp_path, pack) -> None:
 async def test_fastmcp_enforces_generated_input_schema(
     tmp_path: Path, pack: dict[str, Any]
 ) -> None:
+    # FastMCP 4 no longer pre-validates the generated schema at the SDK boundary,
+    # so the refusal now arrives as astrolabe's own structured envelope instead of
+    # a generic SDK "Input validation error". Enforcement is unchanged and strictly
+    # more legible: the envelope names the offending path and the failing validator.
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
     server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
-        with pytest.raises(ToolError, match="Input validation error"):
+        with pytest.raises(ToolError) as excinfo:
             await client.call_tool("jobSearch", {"page": "not-an-integer"})
+    envelope = json.loads(str(excinfo.value))
+    assert envelope["ok"] is False
+    assert envelope["error_code"] == "BAD_ARGUMENTS"
+    (detail,) = json.loads(envelope["error_detail"])
+    assert detail["path"] == "/page"
+    assert detail["validator"] == "type"
 
 
 # ---------- credential refresh: FileCredentialProvider ----------

@@ -20,9 +20,10 @@ classifiers = [
 keywords = ["graphql", "recon", "mcp", "model-context-protocol", "api", "web"]
 
 dependencies = [
-    # FastMCP 3.4 targets the current stable official Python SDK 1.x line.
-    "mcp>=1.29,<2",
-    "fastmcp>=3.4.5,<4",
+    # FastMCP 4 is built on the official Python MCP SDK v2 line; the two are
+    # coupled, so they move together.
+    "mcp>=2.2,<3",
+    "fastmcp>=4.0.10,<5",
     "curl-cffi>=0.7",
     "requests>=2.31",
     "jsonschema>=4.23",
@@ -53,6 +54,12 @@ dev = [
     "mypy>=1.10",
     "types-jsonschema>=4.23",
     "pytest-asyncio>=1.0",
+    # The MCP SDK moved its HTTP stack to httpx2, which drops httpx from the
+    # dependency tree. tests/test_mcp_server.py still drives a local Starlette
+    # ASGI app directly rather than through the SDK transport, so it needs httpx
+    # as a direct dev dependency or it fails to import wherever cloakbrowser
+    # (its only other requirer) is not installed, such as CI.
+    "httpx>=0.28",
 ]
 stealth = [
     "cloakbrowser[geoip]>=0.5",

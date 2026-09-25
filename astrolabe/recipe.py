@@ -643,6 +643,7 @@ def _safety_findings(tree: ast.Module, source: str) -> list[Finding]:
     dangerous_imports = {
         "aiohttp",
         "httpx",
+        "httpx2",
         "os",
         "pathlib",
         "requests",
