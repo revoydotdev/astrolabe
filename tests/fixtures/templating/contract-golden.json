@@ -1,0 +1,1306 @@
+{
+  "auth_headers": [
+    "authorization"
+  ],
+  "base_domain": "shop.example.test",
+  "endpoints": [
+    "/graphql"
+  ],
+  "operations": {
+    "AddToCart": {
+      "http_method": "POST",
+      "identifier_history": [],
+      "input_schema": {
+        "properties": {
+          "cartId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cartId"
+        ],
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "operation": "AddToCart",
+      "proof": {
+        "active": null,
+        "active_history": [],
+        "observed": {
+          "observed_at": "2026-01-01T00:00:20+00:00",
+          "ok": true,
+          "run_id": "capture",
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "protocol": "graphql-vendor-persisted",
+      "queryId_or_hash": null,
+      "request_template": {
+        "query": "mutation AddToCart($cartId: ID!) { addToCart(cartId: $cartId) { ok } }"
+      },
+      "request_template_history": [],
+      "request_url": "https://shop.example.test/graphql",
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "addToCart": {
+            "properties": {
+              "line": {
+                "properties": {
+                  "qty": {
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "semantic_kind": "mutation",
+      "status": "verified-observed",
+      "transport": "graphql",
+      "type": "mutation"
+    },
+    "GET /api/blobs/{hash}": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/blobs/{hash}",
+      "path": "/api/blobs/{hash}",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 4,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": null,
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/cart": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/cart",
+      "path": "/api/cart",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 9,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/checkout": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/checkout",
+      "path": "/api/checkout",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 3,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lines",
+          "total"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "mutation"
+    },
+    "GET /api/invoice": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/invoice",
+      "path": "/api/invoice",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 5,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/invoice/{id}": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/invoice/{id}",
+      "path": "/api/invoice/{id}",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 5,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": null,
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/legacy/{id}": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/legacy/{id}",
+      "path": "/api/legacy/{id}",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": {
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/orders": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/orders",
+      "path": "/api/orders",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 3,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lines",
+          "total"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/products/{id}": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/products/{id}",
+      "path": "/api/products/{id}",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 25,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vendor": {
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "price",
+          "tags",
+          "vendor"
+        ],
+        "type": "object"
+      },
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/public/getCaseDetails": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/public/getCaseDetails",
+      "path": "/api/public/getCaseDetails",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "caseCharge": {
+                "properties": {
+                  "offenseDate": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "hearings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/public/getVersion": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/public/getVersion",
+      "path": "/api/public/getVersion",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 2,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload",
+          "status"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/public/search": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/public/search",
+      "path": "/api/public/search",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 2,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "noOfRecords": {
+                "type": "integer"
+              },
+              "results": {
+                "items": {
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "noOfRecords",
+              "results"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload",
+          "status"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/session/~{uid}": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/session/~{uid}",
+      "path": "/api/session/~{uid}",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": {
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/team": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/team",
+      "path": "/api/team",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 5,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "members"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/team/{id}/members": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/team/{id}/members",
+      "path": "/api/team/{id}/members",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 10,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": null,
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/team/{id}/profile": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/team/{id}/profile",
+      "path": "/api/team/{id}/profile",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 10,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": null,
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/v1/catalog": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/v1/catalog",
+      "path": "/api/v1/catalog",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 6,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "page": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/v2/catalog": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/v2/catalog",
+      "path": "/api/v2/catalog",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 6,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "page": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page"
+        ],
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "query"
+    },
+    "GET /api/widgets/{uuid}": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "GET",
+      "operation": "GET /api/widgets/{uuid}",
+      "path": "/api/widgets/{uuid}",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": false,
+          "samples": 4,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [],
+      "response_media_types": [],
+      "return_schema": null,
+      "status": "typed-unproven",
+      "transport": "rest",
+      "type": "query"
+    },
+    "POST /api/public/createThing": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "POST",
+      "operation": "POST /api/public/createThing",
+      "path": "/api/public/createThing",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "createdId": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "mutation"
+    },
+    "POST /api/public/dropThing": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "POST",
+      "operation": "POST /api/public/dropThing",
+      "path": "/api/public/dropThing",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "dropped": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "mutation"
+    },
+    "POST /api/public/findThing": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "POST",
+      "operation": "POST /api/public/findThing",
+      "path": "/api/public/findThing",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "matches": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "mutation"
+    },
+    "POST /api/public/listAll": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "POST",
+      "operation": "POST /api/public/listAll",
+      "path": "/api/public/listAll",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "every": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "mutation"
+    },
+    "POST /api/public/reindex": {
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "method": "POST",
+      "operation": "POST /api/public/reindex",
+      "path": "/api/public/reindex",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 1,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "queryId_or_hash": null,
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "etaSeconds": {
+                "type": "integer"
+              },
+              "progress": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "status": "verified-observed",
+      "transport": "rest",
+      "type": "mutation"
+    },
+    "ProductQuery": {
+      "http_method": "POST",
+      "identifier_history": [],
+      "input_schema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "includeVendor": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "vendor": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "operation": "ProductQuery",
+      "proof": {
+        "active": null,
+        "active_history": [],
+        "observed": {
+          "observed_at": "2026-01-01T00:00:20+00:00",
+          "ok": true,
+          "run_id": "capture",
+          "samples": 2,
+          "source": "astrolabe-capture",
+          "status": [
+            200
+          ]
+        }
+      },
+      "protocol": "graphql-vendor-persisted",
+      "queryId_or_hash": null,
+      "request_template": {
+        "query": "query ProductQuery($id: ID!, $includeVendor: Boolean) { product(id: $id) { id name } }"
+      },
+      "request_template_history": [],
+      "request_url": "https://shop.example.test/graphql",
+      "response_kinds": [
+        "json-api"
+      ],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": {
+        "properties": {
+          "product": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "vendor": {
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "vendor"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "product"
+        ],
+        "type": "object"
+      },
+      "semantic_kind": "query",
+      "status": "verified-observed",
+      "transport": "graphql",
+      "type": "query"
+    },
+    "WS wss://shop.example.test/live::received::priceUpdate": {
+      "input_schema": {
+        "items": {
+          "properties": {
+            "price": {
+              "type": "number"
+            },
+            "symbol": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "method": null,
+      "operation": "priceUpdate",
+      "path": "wss://shop.example.test/live",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 7,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "return_schema": null,
+      "status": "verified-observed",
+      "transport": "websocket",
+      "type": "subscription"
+    },
+    "WS wss://shop.example.test/live::sent::subscribe": {
+      "input_schema": {
+        "items": {
+          "properties": {
+            "channel": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "method": null,
+      "operation": "subscribe",
+      "path": "wss://shop.example.test/live",
+      "proof": {
+        "active": null,
+        "observed": {
+          "ok": true,
+          "samples": 3,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "queryId_or_hash": null,
+      "return_schema": null,
+      "status": "verified-observed",
+      "transport": "websocket",
+      "type": "mutation"
+    },
+    "persisted:9f8e7d6c5b4a": {
+      "http_method": "POST",
+      "identifier_history": [],
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "lifecycle_status": "current",
+      "operation": null,
+      "proof": {
+        "active": null,
+        "active_history": [],
+        "observed": {
+          "observed_at": "2026-01-01T00:00:20+00:00",
+          "ok": false,
+          "run_id": "capture",
+          "samples": 0,
+          "source": "astrolabe-capture",
+          "status": []
+        }
+      },
+      "protocol": "graphql-vendor-persisted",
+      "queryId_or_hash": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+      "request_template": {},
+      "request_template_history": [],
+      "request_url": "https://shop.example.test/graphql",
+      "response_kinds": [],
+      "response_media_types": [
+        "application/json"
+      ],
+      "return_schema": null,
+      "semantic_kind": "query",
+      "status": "typed-unproven",
+      "transport": "graphql",
+      "type": "query"
+    }
+  },
+  "schema_version": 2
+}

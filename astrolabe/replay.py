@@ -27,7 +27,11 @@ op-file JSON:
 """
 
 from __future__ import annotations
-import argparse, json, os, time, urllib.parse as up
+import argparse
+import json
+import os
+import time
+import urllib.parse as up
 from curl_cffi import requests
 
 try:

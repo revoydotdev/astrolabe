@@ -1,0 +1,95 @@
+{
+  "auth_headers": {
+    "authorization": "bearer"
+  },
+  "base_domain": "shop.example.test",
+  "captured_at": "2026-01-01T00:00:00+00:00",
+  "completed_at": "2026-01-01T00:00:20+00:00",
+  "events": {
+    "introspection": {
+      "enabled": false
+    }
+  },
+  "failures": [
+    {
+      "category": "timeout",
+      "stage": "navigation"
+    }
+  ],
+  "graphql_endpoints": {
+    "/graphql": {
+      "count": 4,
+      "methods": [
+        "POST"
+      ]
+    }
+  },
+  "interactions": [
+    {
+      "calls": 12,
+      "completed_at": "2026-01-01T00:00:10+00:00",
+      "id": "interaction-shell",
+      "kind": "load",
+      "safe_annotation": "initial page",
+      "surface": "https://shop.example.test/"
+    },
+    {
+      "calls": 25,
+      "completed_at": "2026-01-01T00:00:14+00:00",
+      "id": "interaction-tiles",
+      "kind": "scroll",
+      "safe_annotation": "read-only product grid",
+      "surface": "https://shop.example.test/"
+    },
+    {
+      "calls": 10,
+      "completed_at": "2026-01-01T00:00:18+00:00",
+      "id": "interaction-profile",
+      "kind": "click",
+      "safe_annotation": "read-only profile link",
+      "surface": "https://shop.example.test/"
+    },
+    {
+      "calls": 1,
+      "completed_at": "2026-01-01T00:00:20+00:00",
+      "id": "interaction-cart",
+      "kind": "click",
+      "safe_annotation": "add to cart",
+      "surface": "https://shop.example.test/"
+    }
+  ],
+  "service_workers": [
+    "https://shop.example.test/sw.js"
+  ],
+  "surfaces": [
+    "https://shop.example.test/"
+  ],
+  "websockets": {
+    "wss://shop.example.test/live": {
+      "engineio": null,
+      "events_received": {
+        "priceUpdate": {
+          "arg_shape": [
+            {
+              "price": "float",
+              "symbol": "str"
+            }
+          ],
+          "count": 7,
+          "ns": "/prices"
+        }
+      },
+      "events_sent": {
+        "subscribe": {
+          "arg_shape": [
+            {
+              "channel": "str"
+            }
+          ],
+          "count": 3,
+          "ns": null
+        }
+      }
+    }
+  }
+}

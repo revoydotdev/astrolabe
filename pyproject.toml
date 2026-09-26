@@ -20,9 +20,10 @@ classifiers = [
 keywords = ["graphql", "recon", "mcp", "model-context-protocol", "api", "web"]
 
 dependencies = [
-    # FastMCP 3.4 targets the current stable official Python SDK 1.x line.
-    "mcp>=1.29,<2",
-    "fastmcp>=3.4.5,<4",
+    # FastMCP 4 is built on the official Python MCP SDK v2 line; the two are
+    # coupled, so they move together.
+    "mcp>=2.2,<3",
+    "fastmcp>=4.0.10,<5",
     "curl-cffi>=0.7",
     "requests>=2.31",
     "jsonschema>=4.23",
@@ -42,6 +43,7 @@ Repository = "https://github.com/revoydotdev/astrolabe"
 astrolabe = "astrolabe.cli:main"
 astrolabe-mcp = "astrolabe.mcp_server:main_sync"
 astrolabe-mapping-mcp = "astrolabe.mapping_mcp:main"
+astrolabe-unified-mcp = "astrolabe.unified_mcp:main"
 
 [project.optional-dependencies]
 browser-auth = ["cryptography>=43", "secretstorage>=3.3; sys_platform == 'linux'", "publicsuffixlist>=1.0"]
@@ -52,6 +54,12 @@ dev = [
     "mypy>=1.10",
     "types-jsonschema>=4.23",
     "pytest-asyncio>=1.0",
+    # The MCP SDK moved its HTTP stack to httpx2, which drops httpx from the
+    # dependency tree. tests/test_mcp_server.py still drives a local Starlette
+    # ASGI app directly rather than through the SDK transport, so it needs httpx
+    # as a direct dev dependency or it fails to import wherever cloakbrowser
+    # (its only other requirer) is not installed, such as CI.
+    "httpx>=0.28",
 ]
 stealth = [
     "cloakbrowser[geoip]>=0.5",
@@ -65,8 +73,13 @@ packages = ["astrolabe"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Measure the whole production package, not a cherry-picked subset.
-addopts = "--cov=astrolabe --cov-fail-under=65 -q"
+# Treat async test functions as pytest-asyncio tests automatically. Existing
+# tests that explicitly carry ``@pytest.mark.asyncio`` are still valid.
+asyncio_mode = "auto"
+# Measure the whole production package, not a cherry-picked subset. The floor was
+# 65; the suite measures 73.46%, so it is raised to 70 to keep a regression from
+# hiding behind a floor that was never binding. Never lower it.
+addopts = "--cov=astrolabe --cov-fail-under=70 -q"
 
 [tool.ruff]
 line-length = 100
@@ -81,13 +94,23 @@ ignore = ["B008"]
 # Inherited baseline from the private source tree this was extracted from;
 # every other selected rule (including all of ARG) stays enforced. Shrink
 # this list as debt is paid down; never add newly-introduced codes to it.
-"astrolabe/*" = [
-    "E501", "SIM115", "SIM105", "I001", "F541", "E401", "N806", "E702",
-    "F401", "E741", "E701", "UP031", "F841", "B007",
-]
+# Still open, with the work each one implies: E501 42 long lines (needs a
+# production `ruff format` pass), I001 25 unsorted import blocks (same pass,
+# mostly), N806 10 non-lowercase locals, SIM105 13 try/except/pass,
+# SIM115 28 open-in-try.
+"astrolabe/*" = ["E501", "SIM115", "SIM105", "I001", "N806"]
 
 [[tool.mypy.overrides]]
 # cloakbrowser is a private capture-host driver that lives only on the remote
 # capture host; it is deliberately not installed in this dev/CI environment.
 module = "cloakbrowser"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# publicsuffixlist ships in the optional `browser-auth` extra, and
+# browser_cookies.py imports it inside a try/except ImportError that already
+# turns its absence into a named install hint. The gate must type-check without
+# the extra: a developer venv that carries it stays green either way, which is
+# how a clean checkout and CI both failed on this import.
+module = "publicsuffixlist"
 ignore_missing_imports = true

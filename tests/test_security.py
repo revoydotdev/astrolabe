@@ -14,7 +14,6 @@ from astrolabe.operation import (
 )
 from astrolabe.security import (
     REDACTED,
-    Secret,
     host_matches,
     is_first_party,
     normalize_host,
@@ -27,19 +26,36 @@ from astrolabe.security import (
 )
 
 
-def test_secret_display_and_recursive_redaction() -> None:
-    secret = Secret("canary-credential")
-    assert str(secret) == REDACTED
-    assert repr(secret) == REDACTED
-    assert secret.reveal() == "canary-credential"
-    value = {
-        "nested": [{"Authorization": "Bearer canary-credential"}],
-        "message": "token=canary-credential",
-        "binary": b"canary-credential",
+def test_recursive_redaction_covers_the_shapes_credentials_actually_arrive_in() -> None:
+    """The redaction guarantee, pinned on production shapes.
+
+    A value only survives redaction when it is opaque AND stored under a
+    non-credential key, which no credential path in the package does.
+    """
+    auth_map = {
+        "ViewerSatisfiable": {"authorization": "Bearer canary-credential"},
+        "SearchJobs": {"cookie": "sessionid=canary-credential", "x-csrf-token": "canary"},
     }
-    serialized = json.dumps(redact(value))
+    cookie_jar = [{"name": "sessionid", "value": "canary-credential", "domain": "example.com"}]
+    error = {"message": "upstream rejected token=canary-credential", "raw": b"canary-credential"}
+    serialized = json.dumps(redact({**auth_map, "cookies": cookie_jar, **error}))
     assert "canary-credential" not in serialized
+    # The key survives, so a diagnostic still says which credential shape was involved.
+    assert "authorization" in serialized
     assert "<bytes:" in serialized
+    assert redact({"authorization": "x"})["authorization"] == REDACTED
+
+
+def test_no_unwired_credential_wrapper_in_the_package() -> None:
+    """A safeguard nothing constructs fires on nothing and reads as a guarantee.
+
+    ``Secret`` was deleted rather than wired: its ``str()`` returns ``<redacted>``, so
+    wrapping live credentials would silently corrupt any implicit string use (building
+    a Cookie header) in exchange for protecting a leak no credential path produces.
+    """
+    import astrolabe.security as security
+
+    assert not hasattr(security, "Secret")
 
 
 @pytest.mark.parametrize(
@@ -150,6 +166,106 @@ def test_request_metadata_marks_byte_budget_without_decompression_bomb() -> None
     )
     assert metadata["request_truncated"] == {"reason": "body_byte_budget"}
     assert counters["body_byte_budget"] == 1
+
+
+def test_a_gzipped_request_body_is_inflated_exactly_once(monkeypatch) -> None:
+    """One inflation per request, on a real gzip body.
+
+    capture.py decodes once and hands the result to request_metadata; before that the
+    same bytes were inflated by _decode_bounded, again by decode_payload inside
+    request_metadata, and a third time at the call site. The decode is counted, not
+    timed, so this cannot pass on a fast box.
+    """
+    import astrolabe.payloads as payloads
+    import astrolabe.security as security
+
+    calls: list[str] = []
+    real_bounded = security._decode_bounded
+    real_decode = payloads.decode_payload
+
+    def count(label, real):
+        def wrapper(*args, **kwargs):
+            calls.append(label)
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(security, "_decode_bounded", count("_decode_bounded", real_bounded))
+    monkeypatch.setattr(security, "decode_payload", count("security.decode_payload", real_decode))
+    monkeypatch.setattr(payloads, "decode_payload", count("payloads.decode_payload", real_decode))
+
+    body = gzip.compress(json.dumps({"query": "{viewer}", "variables": {"id": "7"}}).encode())
+
+    # What capture.py now does: one decode at the call site, handed to request_metadata.
+    calls.clear()
+    decoded = payloads.decode_payload(body, media_type="application/json", content_encoding="gzip")
+    shared = request_metadata(
+        body, "application/json", content_encoding="gzip", decoded_payload=decoded
+    )
+    assert calls == ["payloads.decode_payload"], f"inflated more than once: {calls}"
+    assert shared["request_packaging"] == ["gzip", "json"]
+    assert shared["request_shape"]["query"] == "str"
+    assert shared["request_fields"] == ["query", "variables"]
+
+    # A caller that decoded nothing is unchanged, and produces identical metadata.
+    calls.clear()
+    assert request_metadata(body, "application/json", content_encoding="gzip") == shared
+    assert calls == ["security.decode_payload"]
+
+
+def test_a_multi_coded_content_encoding_still_counts_against_the_body_budget() -> None:
+    """Pinned because the bounded inflate moved: _decode_bounded reads the whole header
+    as one coding, so a comma-separated list has always been recorded as over budget,
+    even though decode_payload unwraps the list and succeeds."""
+    counters: dict[str, int] = {}
+    body = gzip.compress(json.dumps({"field": "x"}).encode())
+    metadata = request_metadata(
+        body, "application/json", content_encoding="gzip, identity", shape_counters=counters
+    )
+    assert metadata["request_truncated"] == {"reason": "body_byte_budget"}
+    assert metadata["request_shape"] == {"field": "str"}
+    assert counters["body_byte_budget"] == 1
+
+
+def test_atomic_write_json_does_not_reparse_its_own_output(monkeypatch, tmp_path) -> None:
+    """The dropped self-check was accidental: json.dumps cannot emit bytes json.loads
+    rejects, so it only ever doubled the serialization cost of every atomic write.
+    What has to survive it is the durability contract, asserted here rather than assumed."""
+    import astrolabe.security as security
+
+    real_loads = json.loads
+    loads_calls: list[bytes] = []
+
+    def counted_loads(payload, *args, **kwargs):
+        loads_calls.append(payload)
+        return real_loads(payload, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", counted_loads)
+
+    def write(target, value, **kwargs) -> list[bytes]:
+        """One atomic write, and every json.loads it caused."""
+        before = len(loads_calls)
+        security.atomic_write_json(target, value, **kwargs)
+        return loads_calls[before:]
+
+    first = {"records": 2, "failures": []}
+    path = tmp_path / "meta.json"
+    assert write(path, first) == [], "atomic_write_json still round-trips its own payload"
+    assert json.loads(path.read_text()) == first
+    assert path.read_bytes().endswith(b"\n")
+
+    # Still atomic: one file, no leftover temp, and the mode is still constrained.
+    assert oct(path.stat().st_mode & 0o777) == oct(0o644)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["meta.json"]
+
+    secret = tmp_path / "auth.headers.json"
+    assert write(secret, {"authorization": "Bearer CANARY"}, mode=0o600) == []
+    assert oct(secret.stat().st_mode & 0o777) == oct(0o600)
+
+    # And the last-known-good backup still happens on overwrite.
+    assert write(path, {"records": 3}) == []
+    assert json.loads(path.read_text()) == {"records": 3}
+    assert json.loads((tmp_path / ".meta.json.lkg").read_text()) == first
 
 
 def test_safe_text_handles_exceptions_and_assignment_secrets() -> None:

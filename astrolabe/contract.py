@@ -18,10 +18,15 @@ Merges a prior contract (`--merge`) for completeness + drift.
 """
 
 from __future__ import annotations
-import argparse, json, os, re, urllib.parse as up, datetime
+import argparse
+import json
+import os
+import re
+import urllib.parse as up
+import datetime
 from .artifact import atomic_write_json, atomic_write_text
 from .ir import evidence_records_from_graph, inventory_from_graph, load_graph
-from .mcpgen import apply_protocol_overrides, classify_rest, shape_to_schema, tool_name
+from .mcpgen import apply_protocol_overrides, classify_rest, shape_to_schema
 from .shapemerge import coerce_to_schema, merge_json_schemas, merge_shapes, schema_properties
 
 OP = re.compile(r"\b(query|mutation|subscription)\s+([A-Za-z0-9_]+)")
@@ -84,6 +89,12 @@ def build_from_capture(capture_dir):
     meta_path = os.path.join(capture_dir, "meta.json")
     run_meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
     run_id = run_meta.get("run_id") or os.path.basename(os.path.abspath(capture_dir))
+    # Evidence provenance: a normal capture is astrolabe's own headless browser
+    # observing live traffic; an imported HAR is evidence recorded elsewhere and
+    # merely converted here. The distinction MUST survive into the contract so a
+    # reader (human or agent) never mistakes imported evidence for something
+    # astrolabe itself watched happen.
+    observed_source = run_meta.get("evidence_source") or "astrolabe-capture"
     # Every observed return shape per op, plus statuses. Collecting all of them
     # (rather than keeping whichever serialised longest) is what lets the merge
     # recover nullability and which fields are actually always present.
@@ -96,6 +107,11 @@ def build_from_capture(capture_dir):
     # its schemas come from the document, not observed traffic. Absence is normal.
     cap_path = os.path.join(capture_dir, "capture.jsonl")
     if graph is not None:
+        # The graph IS the evidence here, not capture.jsonl, so this is not redundant
+        # with whatever the caller already parsed: handing it pre-parsed records would
+        # change the contract, not just the cost of building it. Measured on the
+        # analyze -> contract tail, a `map` run parses capture.jsonl exactly once (in
+        # analyze.load) precisely because render() has already written graph.json.
         evidence_records = evidence_records_from_graph(graph)
     else:
         cap_lines = open(cap_path) if os.path.exists(cap_path) else []
@@ -165,6 +181,7 @@ def build_from_capture(capture_dir):
                     "samples": s["n"],
                     "run_id": run_id,
                     "observed_at": run_meta.get("completed_at") or run_meta.get("captured_at"),
+                    "source": observed_source,
                 },
                 "active": None,
                 "active_history": [],
@@ -191,12 +208,12 @@ def build_from_capture(capture_dir):
             if params:
                 input_schema["required"] = params
         # Observed capture wins (it is ground truth); fall back to a documented
-        # return schema from an imported spec.
-        return_schema = merge_shapes(rest_ret.get((method, path), [])) or ep.get("return_schema")
+        # return schema from an imported spec. merge_shapes is a pure function of
+        # its input, so the :observed check below reuses this one result.
+        observed_return = merge_shapes(rest_ret.get((method, path), []))
+        return_schema = observed_return or ep.get("return_schema")
         statuses = sorted({s for s in (ep.get("status") or []) if isinstance(s, int)})
-        observed = bool(merge_shapes(rest_ret.get((method, path), []))) and any(
-            st == 200 for st in statuses
-        )
+        observed = bool(observed_return) and any(st == 200 for st in statuses)
         ops[k] = {
             "operation": ep.get("operationId"),
             "type": classify_rest(method, path),
@@ -210,7 +227,12 @@ def build_from_capture(capture_dir):
             "input_schema": input_schema,
             "return_schema": return_schema,
             "proof": {
-                "observed": {"ok": observed, "status": statuses, "samples": ep.get("calls", 0)},
+                "observed": {
+                    "ok": observed,
+                    "status": statuses,
+                    "samples": ep.get("calls", 0),
+                    "source": observed_source,
+                },
                 "active": None,
             },
         }
@@ -237,7 +259,12 @@ def build_from_capture(capture_dir):
             "input_schema": input_schema,
             "return_schema": None,
             "proof": {
-                "observed": {"ok": calls > 0, "status": [], "samples": calls},
+                "observed": {
+                    "ok": calls > 0,
+                    "status": [],
+                    "samples": calls,
+                    "source": observed_source,
+                },
                 "active": None,
             },
         }
@@ -275,13 +302,20 @@ def upgrade(contract):
     return contract
 
 
+# Consecutive merges that must miss an operation before its active proof is dropped.
+# One miss is weak evidence -- a capture may simply not have visited that surface -- while
+# two in a row means nothing observed supports the claim any more.
+UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY = 2
+
+
 def classify(op):
     if op.get("lifecycle_status") not in (None, "current"):
         return "historical"
-    a = op["proof"].get("active")
+    proof = op.get("proof") or {}
+    a = proof.get("active")
     if a and a.get("ok"):
         return "verified-active"
-    if op["proof"]["observed"]["ok"]:
+    if (proof.get("observed") or {}).get("ok"):
         return "verified-observed"
     if op.get("input_schema") or op.get("return_schema"):
         return "typed-unproven"
@@ -299,6 +333,12 @@ def merge(prior, cur):
         return cur, {"added": list(cur["operations"]), "removed": [], "changed": [], "breaking": []}
     prior = upgrade(prior)
     out = {**cur, "operations": dict(prior["operations"])}
+    # Operations were unioned but the rest of the record was last-writer-wins, so an
+    # endpoint or auth header seen only in an earlier run vanished the moment the run
+    # that had it stopped seeing it -- while its operations survived. Union them too.
+    for fld in ("endpoints", "auth_headers"):
+        seen = list(cur.get(fld) or [])
+        out[fld] = list(dict.fromkeys([*seen, *(prior.get(fld) or [])]))
     added, changed, breaking = [], [], []
     pri, curr = prior["operations"], cur["operations"]
     for k, co in curr.items():
@@ -370,6 +410,25 @@ def merge(prior, cur):
         }
         merged["status"] = classify(merged)
         out["operations"][k] = merged
+
+    # A prior-only operation keeps its operations entry but was never re-classified, so
+    # `verified-active` survived indefinitely with nothing observed behind it. Count the
+    # runs that have missed it and drop the active proof once that exceeds
+    # UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY.
+    for key in [k for k in pri if k not in curr]:
+        merged = dict(out["operations"][key])
+        proof = dict(merged.get("proof") or {})
+        misses = int(proof.get("runs_unobserved") or 0) + 1
+        proof["runs_unobserved"] = misses
+        if misses >= UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY and (proof.get("active") or {}).get("ok"):
+            # Kept in active_history so the proof of what did happen is not lost; only
+            # the current claim stops being made.
+            proof["active"] = None
+            proof["active_decayed"] = True
+        merged["proof"] = proof
+        merged["status"] = classify(merged)
+        out["operations"][key] = merged
+
     removed = [k for k in pri if k not in curr]  # present before, not seen now (possible drift)
     return out, {
         "added": added,
@@ -452,10 +511,14 @@ def _coverage_of(ops):
     n = len(ops)
     return {
         "total": n,
-        "typed_input": sum(1 for o in ops if (o["input_schema"] or {}).get("properties")),
+        "typed_input": sum(1 for o in ops if (o.get("input_schema") or {}).get("properties")),
         "typed_return": sum(1 for o in ops if o.get("return_schema")),
-        "verified_observed": sum(1 for o in ops if o["proof"]["observed"]["ok"]),
-        "verified_active": sum(1 for o in ops if (o["proof"].get("active") or {}).get("ok")),
+        "verified_observed": sum(
+            1 for o in ops if ((o.get("proof") or {}).get("observed") or {}).get("ok")
+        ),
+        "verified_active": sum(
+            1 for o in ops if ((o.get("proof") or {}).get("active") or {}).get("ok")
+        ),
     }
 
 
@@ -478,7 +541,7 @@ def render_md(contract, drift=None):
         f"# {contract['base_domain']} — executable typed contract\n",
         f"_Durable contract of record. Endpoints: {', '.join('`' + e + '`' for e in contract['endpoints'])}._\n",
         "## Coverage scorecard\n",
-        f"| metric | count | % |",
+        "| metric | count | % |",
         "|---|---|---|",
         f"| operations | {cov['total']} | 100% |",
         f"| typed input schema | {cov['typed_input']} | {cov['typed_input'] * 100 // n}% |",
@@ -506,7 +569,11 @@ def render_md(contract, drift=None):
             f"- added: {', '.join('`' + x + '`' for x in drift['added']) or '—'}",
             f"- removed (not seen this run): {', '.join('`' + x + '`' for x in drift['removed']) or '—'}",
             f"- return-schema changed: {', '.join('`' + x + '`' for x in drift['changed']) or '—'}",
-            f"- **breaking** (field removed or retyped): "
+            # The union deliberately keeps a field a prior run saw even when this run
+            # did not, so "breaking" describes the schema CHANGE, not the field's absence
+            # from the table above. Saying so prevents the two reading as a contradiction.
+            f"- **breaking** (field removed or retyped last run; the tables above keep the "
+            f"union of both schemas, so the field is still typed): "
             f"{', '.join('`' + x + '`' for x in drift.get('breaking') or []) or '—'}",
             "",
         ]
@@ -516,14 +583,15 @@ def render_md(contract, drift=None):
         "|---|---|---|---|---|---|",
     ]
     for k, o in sorted(contract["operations"].items()):
+        imported = ((o.get("proof") or {}).get("observed") or {}).get("source") == "har-import"
         st = {
             "verified-active": "✅ active",
-            "verified-observed": "🟢 observed",
+            "verified-observed": "🟢 imported" if imported else "🟢 observed",
             "typed-unproven": "🟡 typed",
             "listed": "⚪ listed",
             "historical": "◌ historical",
         }.get(o["status"], o["status"])
-        ins = "✓" if (o["input_schema"] or {}).get("properties") else "—"
+        ins = "✓" if (o.get("input_schema") or {}).get("properties") else "—"
         rets = "✓" if o.get("return_schema") else "—"
         transport = o.get("transport") or "graphql"
         L.append(f"| `{k}` | {o['type']} | {transport} | {st} | {ins} | {rets} |")

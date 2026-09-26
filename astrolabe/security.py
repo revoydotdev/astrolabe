@@ -18,9 +18,9 @@ import urllib.parse as up
 import zlib
 
 try:
-    from .payloads import decode_payload, PackagingError
+    from .payloads import DecodedPayload, decode_payload
 except ImportError:  # flat capture-host deployment
-    from payloads import decode_payload, PackagingError  # type: ignore[import-not-found,no-redef]
+    from payloads import DecodedPayload, decode_payload  # type: ignore[import-not-found,no-redef]
 from collections.abc import Mapping
 from typing import Any
 
@@ -34,26 +34,9 @@ _CANARY_VALUE = re.compile(
     r"[a-z0-9_=-]*",
 )
 
-
-class Secret(str):
-    """A secret value whose display forms are always redacted.
-
-    ``reveal`` is intentionally explicit; ordinary formatting, repr, and str never
-    expose the underlying value.
-    """
-
-    _secret_value: str
-
-    def __new__(cls, value: str) -> Secret:
-        obj = super().__new__(cls, REDACTED)
-        obj._secret_value = value
-        return obj
-
-    def __repr__(self) -> str:
-        return REDACTED
-
-    def reveal(self) -> str:
-        return self._secret_value
+# Headers a caller may never set: connection framing, the cookie jar (which would
+# silently replace the credential the operator configured), and host routing.
+DENIED_HEADERS = frozenset({"connection", "content-length", "cookie", "host", "transfer-encoding"})
 
 
 def redact(value: Any, *, key: str | None = None, depth: int = 0) -> Any:
@@ -61,8 +44,6 @@ def redact(value: Any, *, key: str | None = None, depth: int = 0) -> Any:
     if depth > 12:
         return "<truncated>"
     if key and _SENSITIVE_KEY.search(key):
-        return REDACTED
-    if isinstance(value, Secret):
         return REDACTED
     if isinstance(value, Mapping):
         return {str(k): redact(v, key=str(k), depth=depth + 1) for k, v in value.items()}
@@ -136,7 +117,6 @@ def atomic_write_bytes(
 
 def atomic_write_json(path: str | os.PathLike[str], value: Any, *, mode: int = 0o644) -> None:
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-    json.loads(payload)
     atomic_write_bytes(path, payload, mode=mode)
 
 
@@ -182,6 +162,44 @@ def is_first_party(url: str, allowed_host: str, *, allow_subdomains: bool = True
         return bool(host and host_matches(host, allowed_host, allow_subdomains=allow_subdomains))
     except ValueError:
         return False
+
+
+# Browser egress policy: what the capture browser may fetch outside the target's own
+# domain. A real page pulls third-party subresources (CDNs, analytics, auth widgets) and
+# blocking them breaks sites, so allowing them is the default -- but "allowed" used to
+# mean merely unrecorded, with nothing naming the choice. Operator config only: a tool
+# argument must never be able to widen what the browser reaches.
+EGRESS_ALLOW_THIRD_PARTY = "allow-third-party"
+EGRESS_FIRST_PARTY_ONLY = "first-party-only"
+EGRESS_POLICIES = (EGRESS_ALLOW_THIRD_PARTY, EGRESS_FIRST_PARTY_ONLY)
+EGRESS_ENV = "ASTROLABE_BROWSER_EGRESS"
+
+
+def egress_policy() -> str:
+    """The operator's egress policy, or the default when unset.
+
+    An unrecognized value is an error rather than a silent fallback: a typo that quietly
+    left the permissive policy in place would report a control the run does not have.
+    """
+    raw = (os.environ.get(EGRESS_ENV) or "").strip().lower()
+    if not raw:
+        return EGRESS_ALLOW_THIRD_PARTY
+    if raw not in EGRESS_POLICIES:
+        raise ValueError(f"{EGRESS_ENV} must be one of {list(EGRESS_POLICIES)}, not {raw!r}")
+    return raw
+
+
+def third_party_egress(*, policy: str, recipe_active: bool) -> tuple[bool, str | None]:
+    """Decide a request to a non-first-party origin: (abort, truncation reason or None).
+
+    Returns ``abort=False`` for the permissive policy, which still never records the
+    request: allowed and recorded are deliberately different things.
+    """
+    if recipe_active:
+        return True, "recipe-egress-policy"
+    if policy == EGRESS_FIRST_PARTY_ONLY:
+        return True, "egress-policy"
+    return False, None
 
 
 def safe_url(url: str, *, preserve_keys: frozenset[str] = frozenset({"alias"})) -> str:
@@ -364,8 +382,15 @@ def request_metadata(
     max_body_bytes: int = 2_000_000,
     shape_counters: dict[str, int] | None = None,
     shape_limits: dict[str, int] | None = None,
+    decoded_payload: DecodedPayload | None = None,
 ) -> dict[str, Any]:
-    """Return bounded structural request metadata without retaining values."""
+    """Return bounded structural request metadata without retaining values.
+
+    `decoded_payload` is what a caller that already ran `decode_payload` on these same
+    bytes hands back, so a body is inflated once per request instead of once here and
+    again at the call site. None means "not decoded yet", so callers without one keep
+    working unchanged.
+    """
     if body is None:
         return {}
     raw = body if isinstance(body, bytes) else str(body).encode("utf-8", "replace")
@@ -375,19 +400,39 @@ def request_metadata(
     }
     if content_encoding:
         result["request_content_encoding"] = content_encoding.lower()
-    decoded, body_truncated = _decode_bounded(raw, content_encoding, max_body_bytes)
-    if body_truncated:
+    parsed: Any = None
+
+    def mark_body_budget() -> None:
         counters = shape_counters if shape_counters is not None else {}
         counters["body_byte_budget"] = counters.get("body_byte_budget", 0) + 1
         result["request_truncated"] = {"reason": "body_byte_budget"}
-    parsed: Any = None
+
     try:
-        payload = decode_payload(
-            raw, media_type=media_type, content_encoding=content_encoding, max_bytes=max_body_bytes
+        payload = (
+            decoded_payload
+            if decoded_payload is not None
+            else decode_payload(
+                raw,
+                media_type=media_type,
+                content_encoding=content_encoding,
+                max_bytes=max_body_bytes,
+            )
         )
+        if "," in content_encoding:
+            # A multi-coded content-encoding has always counted against the body budget,
+            # because _decode_bounded reads the whole header as one coding. decode_payload
+            # unwraps the list instead, so the decode succeeds and that count would
+            # otherwise stop happening.
+            mark_body_budget()
         parsed = payload.value
         result["request_packaging"] = list(payload.layers)
     except Exception:
+        # Only the non-JSON fallbacks below need inflated bytes, and every other
+        # over-budget or undecodable body still lands here, so the bounded inflate
+        # runs only when the decode could not be trusted to have bounded it.
+        decoded, body_truncated = _decode_bounded(raw, content_encoding, max_body_bytes)
+        if body_truncated:
+            mark_body_budget()
         if "multipart/form-data" in media_type:
             parsed = _multipart_shape(decoded)
         elif "application/x-www-form-urlencoded" in media_type:

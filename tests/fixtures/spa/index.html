@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Case Search Fixture</title></head>
+<body>
+  <!-- Mirrors a court-records style SPA: nothing API-shaped fires until a user
+       searches, accepts a disclaimer modal, and pages through results. -->
+  <a href="/about">About</a>
+  <form id="search-form">
+    <input id="name" aria-label="Name Search Field">
+    <button id="search" type="submit">Search</button>
+  </form>
+  <dialog id="disclaimer"><p>Disclaimers</p><button id="acknowledge">Acknowledge</button></dialog>
+  <ul id="results"></ul>
+  <button id="more" hidden>Load More Results</button>
+  <script>
+    let lastIndex = 0;
+    let query = "";
+    fetch("/publicData/urls.properties").then(r => r.text());
+    async function search(endingIndex) {
+      const body = {searchString: [query], searchBy: "N"};
+      if (endingIndex) body.endingIndex = endingIndex;
+      const response = await fetch("/api/public/search", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json()).context.entity.payload;
+      for (const row of payload.searchResults) {
+        const item = document.createElement("li");
+        item.className = "result";
+        item.textContent = row.caseNumber;
+        document.getElementById("results").append(item);
+      }
+      lastIndex = payload.lastResponseIndex;
+      document.getElementById("more").hidden = payload.hasMoreRecords !== "true";
+    }
+    document.getElementById("search-form").addEventListener("submit", event => {
+      event.preventDefault();
+      query = document.getElementById("name").value;
+      document.getElementById("disclaimer").showModal();
+    });
+    document.getElementById("acknowledge").addEventListener("click", async () => {
+      document.getElementById("disclaimer").close();
+      await fetch("/api/public/termsAccepted");
+      await search(0);
+    });
+    document.getElementById("more").addEventListener("click", () => search(lastIndex));
+  </script>
+</body>
+</html>
