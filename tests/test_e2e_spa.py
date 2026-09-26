@@ -248,6 +248,15 @@ def test_attached_browser_captures_without_touching_operator_tabs(tmp_path, site
     browser = subprocess.Popen(
         [
             BINARY,
+            # astrolabe's own launches reach Chromium through Playwright, which
+            # appends this unless you ask for chromiumSandbox. Launching the same
+            # browser with different flags is a fidelity gap, and where
+            # unprivileged user namespaces are denied (GitHub's ubuntu-24.04
+            # images set kernel.apparmor_restrict_unprivileged_userns=1) Chromium
+            # aborts at startup with "No usable sandbox!" and never opens the
+            # port. This browser only loads a synthetic loopback fixture on a
+            # throwaway profile, so there is nothing for the sandbox to contain.
+            "--no-sandbox",
             "--headless=new",
             f"--remote-debugging-port={debug_port}",
             f"--user-data-dir={profile}",
@@ -256,7 +265,11 @@ def test_attached_browser_captures_without_touching_operator_tabs(tmp_path, site
             "about:blank",
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        # Captured, not discarded: this is the browser's only diagnostic, and
+        # without it the failure below cannot say why the port stayed shut.
+        # Nothing reads it unless the poll has already failed.
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         endpoint = f"http://127.0.0.1:{debug_port}"
@@ -265,9 +278,22 @@ def test_attached_browser_captures_without_touching_operator_tabs(tmp_path, site
             try:
                 urllib.request.urlopen(f"{endpoint}/json/version", timeout=1).read()
                 break
-            except OSError:
+            except OSError as error:
                 if time.monotonic() > deadline:
-                    raise
+                    # Stop it before reading: a live child could wedge the pipe
+                    # and turn this diagnostic into the hang it reports on.
+                    if browser.poll() is None:
+                        browser.terminate()
+                    try:
+                        stderr = browser.communicate(timeout=15)[1]
+                    except subprocess.TimeoutExpired:
+                        browser.kill()
+                        stderr = browser.communicate()[1]
+                    raise AssertionError(
+                        f"Chromium never opened {endpoint}/json/version within 30s "
+                        f"(exit code {browser.poll()}). Launched: {browser.args}\n"
+                        f"--- browser stderr ---\n{stderr or '(empty)'}"
+                    ) from error
                 time.sleep(0.2)
         # The injected resolver rules are unused in attached mode; the browser already maps.
         out, records, meta = _run_capture(tmp_path, site, ["--cdp-endpoint", endpoint])
