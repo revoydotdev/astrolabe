@@ -1,0 +1,3201 @@
+{
+  "endpoints_json": "{\n  \"auth_headers\": {\n    \"authorization\": \"bearer\"\n  },\n  \"base_domain\": \"shop.example.test\",\n  \"client_credentials\": [],\n  \"declared_operations\": [],\n  \"graphql_endpoints\": [\n    \"/graphql\"\n  ],\n  \"graphql_operations\": {\n    \"AddToCart\": {\n      \"calls\": 1,\n      \"directives\": [],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {\n          \"cartId\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"cartId\"\n        ],\n        \"type\": \"object\"\n      },\n      \"input_shape\": {\n        \"cartId\": \"str\"\n      },\n      \"operation\": \"AddToCart\",\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": null,\n      \"protocol\": \"graphql-http\",\n      \"query\": \"mutation AddToCart($cartId: ID!) { addToCart(cartId: $cartId) { ok } }\",\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"returns\": [\n        \"addToCart\"\n      ],\n      \"root_fields\": [\n        \"addToCart\"\n      ],\n      \"semantic_kind\": \"mutation\",\n      \"type\": \"mutation\",\n      \"variables\": [\n        \"cartId\"\n      ]\n    },\n    \"ProductQuery\": {\n      \"calls\": 2,\n      \"directives\": [\n        \"@auth\",\n        \"@cached\"\n      ],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\"\n          },\n          \"includeVendor\": {\n            \"type\": [\n              \"boolean\",\n              \"null\"\n            ]\n          },\n          \"vendor\": {\n            \"properties\": {\n              \"id\": {\n                \"type\": \"string\"\n              },\n              \"name\": {\n                \"type\": \"string\"\n              }\n            },\n            \"type\": \"object\"\n          }\n        },\n        \"required\": [\n          \"id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"input_shape\": {\n        \"id\": \"str\",\n        \"includeVendor\": \"bool\",\n        \"vendor\": {\n          \"id\": \"str\",\n          \"name\": \"str\"\n        }\n      },\n      \"operation\": \"ProductQuery\",\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": null,\n      \"protocol\": \"graphql-http\",\n      \"query\": \"query ProductQuery($id: ID!, $includeVendor: Boolean) { product(id: $id) { id name } }\",\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"returns\": [\n        \"product\"\n      ],\n      \"root_fields\": [\n        \"product\"\n      ],\n      \"semantic_kind\": \"query\",\n      \"type\": \"query\",\n      \"variables\": [\n        \"id\",\n        \"includeVendor\"\n      ]\n    },\n    \"persisted:9f8e7d6c5b4a\": {\n      \"calls\": 1,\n      \"directives\": [],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"input_shape\": null,\n      \"operation\": null,\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": \"9f8e7d6c5b4a39281706f5e4d3c2b1a0\",\n      \"protocol\": \"graphql-aq\",\n      \"query\": null,\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"returns\": [\n        \"viewer\"\n      ],\n      \"root_fields\": [\n        \"viewer\"\n      ],\n      \"semantic_kind\": \"query\",\n      \"type\": \"query\",\n      \"variables\": []\n    }\n  },\n  \"introspection\": {\n    \"enabled\": false\n  },\n  \"misc_operations\": {\n    \"service-worker:https://shop.example.test/sw.js\": {\n      \"calls\": 1,\n      \"disabled_reason\": \"inventory-only browser worker channel\",\n      \"executable\": false,\n      \"id\": \"service-worker:https://shop.example.test/sw.js\",\n      \"method\": \"REGISTER\",\n      \"protocol\": \"service-worker\",\n      \"url\": \"https://shop.example.test/sw.js\"\n    }\n  },\n  \"rest_endpoints\": [\n    {\n      \"auth_headers\": [\n        \"accept\",\n        \"authorization\"\n      ],\n      \"calls\": 25,\n      \"method\": \"GET\",\n      \"path\": \"/api/products/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/invoice/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 4,\n      \"method\": \"GET\",\n      \"path\": \"/api/widgets/{uuid}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 4,\n      \"method\": \"GET\",\n      \"path\": \"/api/blobs/{hash}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        404\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 2,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/getVersion\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 2,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/search\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/getCaseDetails\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/listAll\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/createThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/dropThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/findThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/reindex\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 9,\n      \"method\": \"GET\",\n      \"path\": \"/api/cart\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 3,\n      \"method\": \"GET\",\n      \"path\": \"/api/checkout\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 3,\n      \"method\": \"GET\",\n      \"path\": \"/api/orders\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 6,\n      \"method\": \"GET\",\n      \"path\": \"/api/v1/catalog\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 6,\n      \"method\": \"GET\",\n      \"path\": \"/api/v2/catalog\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/invoice\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 10,\n      \"method\": \"GET\",\n      \"path\": \"/api/team/{id}/profile\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/legacy/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/session/~{uid}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/team\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 10,\n      \"method\": \"GET\",\n      \"path\": \"/api/team/{id}/members\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    }\n  ],\n  \"websocket_operations\": {\n    \"wss://shop.example.test/live::received::priceUpdate\": {\n      \"calls\": 7,\n      \"direction\": \"received\",\n      \"engineio\": null,\n      \"event\": \"priceUpdate\",\n      \"input_schema\": {\n        \"items\": {\n          \"properties\": {\n            \"price\": {\n              \"type\": \"number\"\n            },\n            \"symbol\": {\n              \"type\": \"string\"\n            }\n          },\n          \"type\": \"object\"\n        },\n        \"type\": \"array\"\n      },\n      \"namespace\": \"/prices\",\n      \"url\": \"wss://shop.example.test/live\"\n    },\n    \"wss://shop.example.test/live::sent::subscribe\": {\n      \"calls\": 3,\n      \"direction\": \"sent\",\n      \"engineio\": null,\n      \"event\": \"subscribe\",\n      \"input_schema\": {\n        \"items\": {\n          \"properties\": {\n            \"channel\": {\n              \"type\": \"string\"\n            }\n          },\n          \"type\": \"object\"\n        },\n        \"type\": \"array\"\n      },\n      \"namespace\": null,\n      \"url\": \"wss://shop.example.test/live\"\n    }\n  },\n  \"websockets\": {\n    \"wss://shop.example.test/live\": {\n      \"engineio\": null,\n      \"events_received\": {\n        \"priceUpdate\": {\n          \"arg_shape\": [\n            {\n              \"price\": \"float\",\n              \"symbol\": \"str\"\n            }\n          ],\n          \"count\": 7,\n          \"ns\": \"/prices\"\n        }\n      },\n      \"events_sent\": {\n        \"subscribe\": {\n          \"arg_shape\": [\n            {\n              \"channel\": \"str\"\n            }\n          ],\n          \"count\": 3,\n          \"ns\": null\n        }\n      }\n    }\n  }\n}\n",
+  "graphql_operations": [
+    "AddToCart",
+    "ProductQuery",
+    "persisted:9f8e7d6c5b4a"
+  ],
+  "packs": {
+    "include_mutations=False": [
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "includeVendor": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "vendor": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "method": null,
+        "name": "ProductQuery",
+        "operation": "ProductQuery",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "product": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "vendor"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "product"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": null,
+        "reason": null,
+        "transport": "graphql",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {
+            "cartId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cartId"
+          ],
+          "type": "object"
+        },
+        "method": null,
+        "name": "AddToCart",
+        "operation": "AddToCart",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "addToCart": {
+                  "properties": {
+                    "line": {
+                      "properties": {
+                        "qty": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": null,
+        "reason": "mutation \u2014 gated (write op); expose with --include-mutations + review",
+        "transport": "graphql",
+        "type": "mutation"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": null,
+        "name": "persisted_9f8e7d6c5b4a",
+        "operation": null,
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": null,
+        "reason": "graphql-vendor-persisted has no reviewed exact execution adapter",
+        "transport": "graphql",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiProductsId",
+        "operation": "GET /api/products/{id}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "number"
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "vendor": {
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "price",
+                "tags",
+                "vendor"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/products/{id}",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiInvoiceId",
+        "operation": "GET /api/invoice/{id}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/invoice/{id}",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiWidgetsUuid",
+        "operation": "GET /api/widgets/{uuid}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/widgets/{uuid}",
+        "reason": "unsatisfiable_required_input: uuid",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiBlobsHash",
+        "operation": "GET /api/blobs/{hash}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/blobs/{hash}",
+        "reason": "unsatisfiable_required_input: hash",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiPublicGetVersion",
+        "operation": "GET /api/public/getVersion",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload",
+                "status"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/getVersion",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiPublicSearch",
+        "operation": "GET /api/public/search",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "noOfRecords": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "items": {
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "noOfRecords",
+                    "results"
+                  ],
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload",
+                "status"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/search",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiPublicGetCaseDetails",
+        "operation": "GET /api/public/getCaseDetails",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "caseCharge": {
+                      "properties": {
+                        "offenseDate": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "hearings": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/getCaseDetails",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicListAll",
+        "operation": "POST /api/public/listAll",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "every": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/listAll",
+        "reason": "POST write op \u2014 gated; expose with --include-mutations + review",
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicCreateThing",
+        "operation": "POST /api/public/createThing",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "createdId": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/createThing",
+        "reason": "POST write op \u2014 gated; expose with --include-mutations + review",
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicDropThing",
+        "operation": "POST /api/public/dropThing",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "at": {
+                      "type": "string"
+                    },
+                    "dropped": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/dropThing",
+        "reason": "POST write op \u2014 gated; expose with --include-mutations + review",
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicFindThing",
+        "operation": "POST /api/public/findThing",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "matches": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/findThing",
+        "reason": "POST write op \u2014 gated; expose with --include-mutations + review",
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicReindex",
+        "operation": "POST /api/public/reindex",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "etaSeconds": {
+                      "type": "integer"
+                    },
+                    "progress": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/reindex",
+        "reason": "POST write op \u2014 gated; expose with --include-mutations + review",
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiCart",
+        "operation": "GET /api/cart",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "lines": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/cart",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiCheckout",
+        "operation": "GET /api/checkout",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "lines": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lines",
+                "total"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/checkout",
+        "reason": "GET write op \u2014 gated; expose with --include-mutations + review",
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiOrders",
+        "operation": "GET /api/orders",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "lines": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lines",
+                "total"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/orders",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiV1Catalog",
+        "operation": "GET /api/v1/catalog",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "page": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "items",
+                "page"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/v1/catalog",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiV2Catalog",
+        "operation": "GET /api/v2/catalog",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "page": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "items",
+                "page"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/v2/catalog",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiInvoice",
+        "operation": "GET /api/invoice",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/invoice",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiTeamIdProfile",
+        "operation": "GET /api/team/{id}/profile",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/team/{id}/profile",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiLegacyId",
+        "operation": "GET /api/legacy/{id}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "a": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/legacy/{id}",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiSession_uid",
+        "operation": "GET /api/session/~{uid}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/session/~{uid}",
+        "reason": "unsatisfiable_required_input: uid",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiTeam",
+        "operation": "GET /api/team",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "members": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "members"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/team",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiTeamIdMembers",
+        "operation": "GET /api/team/{id}/members",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/team/{id}/members",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      }
+    ],
+    "include_mutations=True": [
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "includeVendor": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "vendor": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "method": null,
+        "name": "ProductQuery",
+        "operation": "ProductQuery",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "product": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "vendor"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "product"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": null,
+        "reason": null,
+        "transport": "graphql",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {
+            "cartId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cartId"
+          ],
+          "type": "object"
+        },
+        "method": null,
+        "name": "AddToCart",
+        "operation": "AddToCart",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "addToCart": {
+                  "properties": {
+                    "line": {
+                      "properties": {
+                        "qty": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": null,
+        "reason": null,
+        "transport": "graphql",
+        "type": "mutation"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": null,
+        "name": "persisted_9f8e7d6c5b4a",
+        "operation": null,
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": null,
+        "reason": "graphql-vendor-persisted has no reviewed exact execution adapter",
+        "transport": "graphql",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiProductsId",
+        "operation": "GET /api/products/{id}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "number"
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "vendor": {
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "price",
+                "tags",
+                "vendor"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/products/{id}",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiInvoiceId",
+        "operation": "GET /api/invoice/{id}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/invoice/{id}",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiWidgetsUuid",
+        "operation": "GET /api/widgets/{uuid}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/widgets/{uuid}",
+        "reason": "unsatisfiable_required_input: uuid",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiBlobsHash",
+        "operation": "GET /api/blobs/{hash}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/blobs/{hash}",
+        "reason": "unsatisfiable_required_input: hash",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiPublicGetVersion",
+        "operation": "GET /api/public/getVersion",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload",
+                "status"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/getVersion",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiPublicSearch",
+        "operation": "GET /api/public/search",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "noOfRecords": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "items": {
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "noOfRecords",
+                    "results"
+                  ],
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload",
+                "status"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/search",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiPublicGetCaseDetails",
+        "operation": "GET /api/public/getCaseDetails",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "caseCharge": {
+                      "properties": {
+                        "offenseDate": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "hearings": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/getCaseDetails",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicListAll",
+        "operation": "POST /api/public/listAll",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "every": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/listAll",
+        "reason": null,
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicCreateThing",
+        "operation": "POST /api/public/createThing",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "createdId": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/createThing",
+        "reason": null,
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicDropThing",
+        "operation": "POST /api/public/dropThing",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "at": {
+                      "type": "string"
+                    },
+                    "dropped": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/dropThing",
+        "reason": null,
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicFindThing",
+        "operation": "POST /api/public/findThing",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "matches": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/findThing",
+        "reason": null,
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "POST",
+        "name": "postApiPublicReindex",
+        "operation": "POST /api/public/reindex",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "payload": {
+                  "properties": {
+                    "etaSeconds": {
+                      "type": "integer"
+                    },
+                    "progress": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/public/reindex",
+        "reason": null,
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiCart",
+        "operation": "GET /api/cart",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "lines": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/cart",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiCheckout",
+        "operation": "GET /api/checkout",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "lines": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lines",
+                "total"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/checkout",
+        "reason": null,
+        "transport": "rest",
+        "type": "mutation"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiOrders",
+        "operation": "GET /api/orders",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "lines": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lines",
+                "total"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/orders",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiV1Catalog",
+        "operation": "GET /api/v1/catalog",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "page": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "items",
+                "page"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/v1/catalog",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiV2Catalog",
+        "operation": "GET /api/v2/catalog",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "page": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "items",
+                "page"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/v2/catalog",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiInvoice",
+        "operation": "GET /api/invoice",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/invoice",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiTeamIdProfile",
+        "operation": "GET /api/team/{id}/profile",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/team/{id}/profile",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiLegacyId",
+        "operation": "GET /api/legacy/{id}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "a": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/legacy/{id}",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiSession_uid",
+        "operation": "GET /api/session/~{uid}",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/session/~{uid}",
+        "reason": "unsatisfiable_required_input: uid",
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": true,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiTeam",
+        "operation": "GET /api/team",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "data": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "members": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "members"
+              ],
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/team",
+        "reason": null,
+        "transport": "rest",
+        "type": "query"
+      },
+      {
+        "exposed": false,
+        "input_schema": {
+          "properties": {},
+          "type": "object"
+        },
+        "method": "GET",
+        "name": "getApiTeamIdMembers",
+        "operation": "GET /api/team/{id}/members",
+        "output_schema": {
+          "additionalProperties": true,
+          "properties": {
+            "_astrolabe": {
+              "additionalProperties": true,
+              "description": "provenance: http_status, duration_ms, attempts",
+              "type": "object"
+            },
+            "error_code": {
+              "type": "string"
+            },
+            "error_detail": {
+              "type": "string"
+            },
+            "errors": {
+              "description": "upstream GraphQL/API errors, if any",
+              "type": "array"
+            },
+            "ok": {
+              "description": "false on a astrolabe-level failure",
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "path": "/api/team/{id}/members",
+        "reason": "unsatisfiable_required_input: id",
+        "transport": "rest",
+        "type": "query"
+      }
+    ]
+  },
+  "rest_paths": [
+    [
+      "GET",
+      "/api/products/{id}",
+      25
+    ],
+    [
+      "GET",
+      "/api/invoice/{id}",
+      5
+    ],
+    [
+      "GET",
+      "/api/widgets/{uuid}",
+      4
+    ],
+    [
+      "GET",
+      "/api/blobs/{hash}",
+      4
+    ],
+    [
+      "GET",
+      "/api/public/getVersion",
+      2
+    ],
+    [
+      "GET",
+      "/api/public/search",
+      2
+    ],
+    [
+      "GET",
+      "/api/public/getCaseDetails",
+      1
+    ],
+    [
+      "POST",
+      "/api/public/listAll",
+      1
+    ],
+    [
+      "POST",
+      "/api/public/createThing",
+      1
+    ],
+    [
+      "POST",
+      "/api/public/dropThing",
+      1
+    ],
+    [
+      "POST",
+      "/api/public/findThing",
+      1
+    ],
+    [
+      "POST",
+      "/api/public/reindex",
+      1
+    ],
+    [
+      "GET",
+      "/api/cart",
+      9
+    ],
+    [
+      "GET",
+      "/api/checkout",
+      3
+    ],
+    [
+      "GET",
+      "/api/orders",
+      3
+    ],
+    [
+      "GET",
+      "/api/v1/catalog",
+      6
+    ],
+    [
+      "GET",
+      "/api/v2/catalog",
+      6
+    ],
+    [
+      "GET",
+      "/api/invoice",
+      5
+    ],
+    [
+      "GET",
+      "/api/team/{id}/profile",
+      10
+    ],
+    [
+      "GET",
+      "/api/legacy/{id}",
+      1
+    ],
+    [
+      "GET",
+      "/api/session/~{uid}",
+      1
+    ],
+    [
+      "GET",
+      "/api/team",
+      5
+    ],
+    [
+      "GET",
+      "/api/team/{id}/members",
+      10
+    ]
+  ]
+}

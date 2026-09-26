@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json as _json
 
+import astrolabe.contract as contract_module
 from astrolabe.contract import (
     SCHEMA_VERSION,
     apply_active,
@@ -850,3 +851,58 @@ def test_breaking_drift_line_explains_the_union() -> None:
     rendered = render_md(cur, drift)
     line = next(row for row in rendered.splitlines() if "**breaking**" in row)
     assert "union" in line
+
+
+def test_rest_return_shape_is_merged_exactly_once_per_method_and_path(tmp_path, monkeypatch):
+    """build_from_capture used to call merge_shapes twice for the same
+    (method, path) key -- once for the return schema, once for the truthiness
+    check that decides proof.observed.ok -- so a capture with many REST endpoints
+    merged every endpoint's shapes twice. The count is asserted rather than the
+    timing: a duplicate call costs little, but the assertion is what makes a
+    future re-duplication fail instead of merely get slower."""
+    rest = [
+        {
+            "method": "GET",
+            "path": f"/api/items/{name}/{{id}}",
+            "auth_headers": [],
+            "calls": 1,
+            "status": [200],
+        }
+        for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+    ]
+    (tmp_path / "endpoints.json").write_text(_json.dumps(_endpoints_with_rest(rest)))
+    (tmp_path / "capture.jsonl").write_text(
+        "".join(
+            _json.dumps(
+                {
+                    "method": "GET",
+                    "url": f"https://shopgoodwill.example/api/items/{name}/111222",
+                    "status": 200,
+                    "resp_shape": {"id": "int", "title": "str"},
+                }
+            )
+            + "\n"
+            for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+        )
+    )
+
+    calls: list[object] = []
+    real = contract_module.merge_shapes
+
+    def counting_merge(shapes, *args, **kwargs):
+        calls.append(shapes)
+        return real(shapes, *args, **kwargs)
+
+    monkeypatch.setattr(contract_module, "merge_shapes", counting_merge)
+    built = build_from_capture(str(tmp_path))
+
+    rest_calls = [c for c in calls if isinstance(c, list)]
+    assert len(rest_calls) == len(rest), f"expected one merge per REST key, got {len(rest_calls)}"
+    for path in (
+        f"/api/items/{name}/{{id}}" for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+    ):
+        op = built["operations"][f"GET {path}"]
+        # The result is still consumed: one call feeding both the stored schema
+        # and the observed proof, not a call that was simply dropped.
+        assert op["return_schema"]["properties"]["title"] == {"type": "string"}
+        assert op["proof"]["observed"]["ok"] is True

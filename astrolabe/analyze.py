@@ -148,8 +148,17 @@ def path_tmpl(url):
     templates — changing this function's substitution rules would silently
     break that join. See PathTemplater for the evidence-based replacement
     used by build() to key the REST inventory.
+
+    The substitution rules themselves live in `_template_path_segment()` so a
+    caller that already parsed the path does not parse it again; the rules are
+    unchanged, and `path_tmpl(url)` is still exactly `_template_path_segment` of
+    `urlparse(url).path`.
     """
-    p = up.urlparse(url).path
+    return _template_path_segment(up.urlparse(url).path)
+
+
+def _template_path_segment(p):
+    """path_tmpl()'s substitution rules, applied to an already-parsed path."""
     p = re.sub(r"/\d{3,}", "/{id}", p)
     p = re.sub(r"/[0-9a-f]{24,}", "/{hash}", p)
     p = re.sub(r"~[0-9a-z]+", "~{uid}", p)
@@ -239,13 +248,45 @@ def _param_name_for_values(values):
     return "slug"
 
 
+# ponytail: _UNRESOLVED marks a node whose parameter decision has not been
+# computed yet. The decision is a pure function of `counts`/`shapes`, both of
+# which are written only by PathTemplater.__init__ and read only by _param() --
+# so caching it is exactly equivalent to recomputing it, and it turns the
+# per-record shape scan into one scan per node. Nothing is capped, sampled or
+# approximated: the boundary stays exact, so this cannot move which segments get
+# templated and therefore cannot move a REST tool name.
+_UNRESOLVED = object()
+
+
 class _TrieNode:
-    __slots__ = ("children", "counts", "shapes")
+    __slots__ = ("children", "counts", "shapes", "param")
 
     def __init__(self):
         self.children: dict[str, _TrieNode] = {}
         self.counts: dict[str, int] = {}  # next-segment value -> occurrence count
         self.shapes: dict[str, set[str]] = {}  # next-segment value -> response key paths
+        self.param = _UNRESOLVED  # memoized `{...}` segment for this position, or None
+
+    def _param(self):
+        """The `{id}`-style segment for this position, or None to keep the
+        segment literal. Computed once per node; see _UNRESOLVED above."""
+        cached = self.param
+        if cached is not _UNRESOLVED:
+            return cached
+        counts = self.counts
+        n = sum(counts.values())
+        d = len(counts)
+        if (
+            d >= 2
+            and n >= MIN_SAMPLES
+            and (d / n) >= PARAM_UNIQUE_RATIO
+            and not _distinct_endpoints(self.shapes)
+        ):
+            cached = "{" + _param_name_for_values(counts.keys()) + "}"
+        else:
+            cached = None
+        self.param = cached
+        return cached
 
 
 # Cardinality alone cannot tell `/api/public/{id}` from a handful of RPC-style
@@ -275,7 +316,7 @@ def _shape_paths(shape, prefix="", depth=0):
 
 
 def _distinct_endpoints(shapes_by_value):
-    shaped = [paths for paths in shapes_by_value.values() if paths]
+    shaped = list({frozenset(paths) for paths in shapes_by_value.values() if paths})
     for index, left in enumerate(shaped):
         for right in shaped[index + 1 :]:
             overlap = len(left & right) / len(left | right)
@@ -309,25 +350,16 @@ class PathTemplater:
                 node = node.children.setdefault(s, _TrieNode())
 
     def apply(self, url):
-        path = up.urlparse(url).path
+        return self.apply_path(up.urlparse(url).path)
+
+    def apply_path(self, path):
         raw = path.split("/")
-        baseline = path_tmpl(url).split("/")
+        baseline = _template_path_segment(path).split("/")
         out = []
         node: _TrieNode | None = self._root
         for i, s in enumerate(raw):
-            counts = node.counts if node is not None else {}
-            n = sum(counts.values())
-            d = len(counts)
-            shapes = node.shapes if node is not None else {}
-            if (
-                d >= 2
-                and n >= MIN_SAMPLES
-                and (d / n) >= PARAM_UNIQUE_RATIO
-                and not _distinct_endpoints(shapes)
-            ):
-                out.append("{" + _param_name_for_values(counts.keys()) + "}")
-            else:
-                out.append(baseline[i] if i < len(baseline) else s)
+            param = node._param() if node is not None else None
+            out.append(param if param is not None else (baseline[i] if i < len(baseline) else s))
             node = node.children.get(s) if node is not None else None
         return "/".join(out)
 
@@ -392,6 +424,7 @@ def build(recs, meta):
                     "status": set(),
                     "input_shape": None,
                     "input_shapes": [],
+                    "input_depth": 0,  # _depth_keys of input_shape, so it is not recomputed
                     "query": "",
                     "http_method": r.get("method"),
                     "request_media_type": r.get("request_media_type"),
@@ -419,8 +452,9 @@ def build(recs, meta):
             if isinstance(vs, dict):
                 d["input_shapes"].append(vs)
             # keep the richest input shape seen (most nested keys)
-            if isinstance(vs, dict) and _depth_keys(vs) > _depth_keys(d["input_shape"]):
+            if isinstance(vs, dict) and _depth_keys(vs) > d["input_depth"]:
                 d["input_shape"] = vs
+                d["input_depth"] = _depth_keys(vs)
             rs = r.get("resp_shape")
             if isinstance(rs, dict) and isinstance(rs.get("data"), dict):
                 d["returns"].update(rs["data"].keys())
@@ -435,20 +469,23 @@ def build(recs, meta):
             MediaKind.JAVASCRIPT.value,
         }
 
-    rest_records = [
-        r
-        for r in recs
-        if "graphql" not in r and up.urlparse(r["url"]).path not in gql_paths and eligible_rest(r)
-    ]
+    # One pass, one parse: the filter below and the loop that follows used to test
+    # the same negated predicate over the same records, so each URL was parsed
+    # twice. Keeping the path alongside the record hands it to the templater too.
+    rest_records = []
+    for r in recs:
+        if "graphql" in r or not eligible_rest(r):
+            continue
+        path = up.urlparse(r["url"]).path
+        if path not in gql_paths:
+            rest_records.append((r, path))
     templater = PathTemplater(
-        [r["url"] for r in rest_records], [r.get("resp_shape") for r in rest_records]
+        [r["url"] for r, _ in rest_records], [r.get("resp_shape") for r, _ in rest_records]
     )
 
     rest = collections.OrderedDict()
-    for r in recs:
-        if "graphql" in r or up.urlparse(r["url"]).path in gql_paths or not eligible_rest(r):
-            continue
-        key = (r["method"], templater.apply(r["url"]))
+    for r, path in rest_records:
+        key = (r["method"], templater.apply_path(path))
         e = rest.setdefault(
             key,
             {"n": 0, "hdr": {}, "status": set(), "response_kinds": set(), "media_types": set()},

@@ -198,12 +198,12 @@ def build_from_capture(capture_dir):
             if params:
                 input_schema["required"] = params
         # Observed capture wins (it is ground truth); fall back to a documented
-        # return schema from an imported spec.
-        return_schema = merge_shapes(rest_ret.get((method, path), [])) or ep.get("return_schema")
+        # return schema from an imported spec. merge_shapes is a pure function of
+        # its input, so the :observed check below reuses this one result.
+        observed_return = merge_shapes(rest_ret.get((method, path), []))
+        return_schema = observed_return or ep.get("return_schema")
         statuses = sorted({s for s in (ep.get("status") or []) if isinstance(s, int)})
-        observed = bool(merge_shapes(rest_ret.get((method, path), []))) and any(
-            st == 200 for st in statuses
-        )
+        observed = bool(observed_return) and any(st == 200 for st in statuses)
         ops[k] = {
             "operation": ep.get("operationId"),
             "type": classify_rest(method, path),

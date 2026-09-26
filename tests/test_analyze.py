@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 
 import pytest
 
 import astrolabe.analyze as analyze
+import astrolabe.mcpgen as mcpgen
 
 # ---- generic default categorization ---------------------------------------
 
@@ -517,3 +520,163 @@ def test_id_space_with_matching_responses_is_still_parameterized():
     urls = _urls("/api/user/42", "/api/user/43", "/api/user/44", "/api/user/7", "/api/user/91")
     t = analyze.PathTemplater(urls, shapes)
     assert t.apply(urls[1]) == "/api/user/{id}"
+
+
+# ---- both branches of the shape predicate, and the exactness of the memo -----
+# A perf change to PathTemplater is a correctness change until proven otherwise:
+# the memo in _TrieNode._param decides whether a segment is an id or a literal
+# fork, and that flows into mcpgen.rest_tool_name and every contract key. The two
+# tests below pin BOTH branches, because a benchmark built on the fast branch
+# proves nothing about the slow one.
+
+SHARED_ID_SHAPE = {
+    "id": "int",
+    "name": "str",
+    "price": "float",
+    "tags": ["str"],
+    "vendor": {"id": "int", "name": "str"},
+}
+
+
+def _shared_shape_urls(n):
+    return [f"https://shop.example.test/api/products/{i}" for i in range(n)]
+
+
+def test_shared_response_shape_across_an_id_space_templates():
+    """Many ids, ONE response shape: the expensive branch. _distinct_endpoints
+    must scan every pair and still return False, so the position templates."""
+    urls = _shared_shape_urls(25)
+    t = analyze.PathTemplater(urls, [SHARED_ID_SHAPE] * 25)
+    for u in urls:
+        assert t.apply(u) == "/api/products/{id}"
+
+
+def test_distinct_response_shape_across_an_id_space_stays_literal():
+    """The same id space with a distinct shape per id: _distinct_endpoints returns
+    True on the first pair, the templating branch is never taken, and the segment
+    must be left literal. This is the branch a shared-shape benchmark skips."""
+    urls = _shared_shape_urls(25)
+    shapes = [{"id": "int", f"field_{i}": "str"} for i in range(25)]
+    t = analyze.PathTemplater(urls, shapes)
+    for u in urls:
+        assert t.apply(u) == f"/api/products/{urls.index(u)}"
+
+
+def test_memoized_node_decision_depends_only_on_the_construction_input():
+    """The memo must be a pure function of state fixed at construction, so
+    repeating a pass, reversing the order, or building a second templater over
+    the same records must all give the same answer for the same record. Call
+    history cannot leak into a decision.
+
+    (A templater over a *subset* may legitimately differ: fewer than
+    MIN_SAMPLES observations is thin evidence, which is the documented fallback
+    to path_tmpl()'s lexical guess. That is about the input, not the memo.)"""
+    urls = _shared_shape_urls(12) + _urls(
+        "/api/public/getVersion",
+        "/api/public/getVersion",
+        "/api/public/search",
+        "/api/public/search",
+    )
+    shapes = [SHARED_ID_SHAPE] * 12 + [
+        {"status": "str", "payload": {"version": "str"}},
+        {"status": "str", "payload": {"version": "str"}},
+        {"status": "str", "payload": {"results": ["str"]}},
+        {"status": "str", "payload": {"results": ["str"]}},
+    ]
+    first = analyze.PathTemplater(urls, shapes)
+    once = [first.apply(u) for u in urls]
+    assert once == [first.apply(u) for u in urls], "a second pass changed its own answers"
+
+    shuffled = analyze.PathTemplater(urls[::-1], shapes[::-1])
+    assert [shuffled.apply(u) for u in urls] == once, "construction order changed an answer"
+
+    rebuilt = analyze.PathTemplater(urls, shapes)
+    assert [rebuilt.apply(u) for u in urls] == once, "a fresh templater disagreed"
+
+
+# ---- the golden REST/GraphQL projection (byte-for-byte) --------------------
+# A performance refactor of the templater that silently moved one path would
+# rename one REST tool and invalidate one contract key while every unit test
+# still passed. This drives the real render() + mcpgen.build_pack() over a
+# committed fixture and compares the whole downstream surface byte-for-byte.
+# Regenerate ONLY with deliberate intent:
+#   ASTROLABE_BENCH=1 .venv/bin/python -m pytest tests/test_analyze.py -k golden
+# then inspect the diff -- a changed byte here is a changed inference, not a
+# re-baseline.
+
+TEMPLATING_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "templating")
+
+
+def _read_fixture(name, binary=False):
+    with open(os.path.join(TEMPLATING_FIXTURE, name), "rb" if binary else "r") as handle:
+        return handle.read()
+
+
+def _golden_projection():
+    recs = [json.loads(line) for line in _read_fixture("records.jsonl").splitlines()]
+    meta = json.loads(_read_fixture("meta.json"))
+    with tempfile.TemporaryDirectory() as tmp:
+        analyze.render(tmp, recs, meta)
+        endpoints = _read_fixture(os.path.join(tmp, "endpoints.json"), binary=True)
+        for name in ("records.jsonl", "meta.json"):
+            shutil.copy(os.path.join(TEMPLATING_FIXTURE, name), os.path.join(tmp, name))
+        packs = {
+            f"include_mutations={mutations}": [
+                {
+                    "name": tool["name"],
+                    "operation": tool["operation"],
+                    "transport": tool["transport"],
+                    "type": tool["type"],
+                    "exposed": tool["exposed"],
+                    "reason": tool["reason"],
+                    "path": tool.get("path"),
+                    "method": tool.get("method"),
+                    "input_schema": tool.get("input_schema"),
+                    "output_schema": tool.get("output_schema"),
+                }
+                for tool in mcpgen.build_pack(tmp, include_mutations=mutations)["tools"]
+            ]
+            for mutations in (False, True)
+        }
+    inv = json.loads(endpoints)
+    return {
+        "endpoints_json": endpoints.decode(),
+        "rest_paths": [[ep["method"], ep["path"], ep["calls"]] for ep in inv["rest_endpoints"]],
+        "graphql_operations": sorted(inv["graphql_operations"]),
+        "packs": packs,
+    }
+
+
+def test_render_and_mcpgen_reproduce_the_golden_projection_byte_for_byte():
+    expected = _read_fixture("golden.json", binary=True)
+    actual = (json.dumps(_golden_projection(), indent=2, sort_keys=True) + "\n").encode()
+    if actual != expected:
+        pytest.fail(
+            "analyze/mcpgen output moved. A performance change altered inference -- find "
+            "out which path, tool name or schema changed before touching this file.\n"
+            + "\n".join(
+                __import__("difflib").unified_diff(
+                    expected.decode().splitlines(),
+                    actual.decode().splitlines(),
+                    "golden",
+                    "actual",
+                    lineterm="",
+                    n=1,
+                )
+            )[:4000]
+        )
+
+
+def test_golden_projection_covers_both_templating_branches():
+    """Guards the fixture itself: if the golden ever stopped exercising a real id
+    space or a real literal fork it would stop being evidence of anything."""
+    paths = {path for _, path, _ in _golden_projection()["rest_paths"]}
+    assert "/api/products/{id}" in paths
+    assert "/api/invoice/{id}" in paths
+    assert "/api/widgets/{uuid}" in paths
+    assert "/api/blobs/{hash}" in paths
+    # literal forks kept literal by the shape predicate, not by low cardinality
+    assert "/api/public/getVersion" in paths
+    assert "/api/public/reindex" in paths
+    # and a low-cardinality fork kept literal by the ratio
+    assert "/api/v1/catalog" in paths and "/api/v2/catalog" in paths
