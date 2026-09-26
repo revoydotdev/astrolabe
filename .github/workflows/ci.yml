@@ -37,23 +37,23 @@ jobs:
       # It used to skip silently here, which is indistinguishable from having no
       # coverage of the capture engine at all.
       - name: Install Chromium for the browser e2e
-        run: uv run playwright install --with-deps chromium
+        run: uv run --extra dev --extra browser-auth playwright install --with-deps chromium
 
       - name: Lint (ruff check)
-        run: uv run ruff check .
+        run: uv run --extra dev --extra browser-auth ruff check .
 
       - name: Lint (ruff format)
-        run: uv run ruff format --check tests/
+        run: uv run --extra dev --extra browser-auth ruff format --check tests/
 
       - name: Type check (mypy)
-        run: uv run mypy tests astrolabe
+        run: uv run --extra dev --extra browser-auth mypy tests astrolabe
 
       - name: Test (pytest, with coverage gate)
         run: |
           set -o pipefail
           # No -q here: addopts already supplies it, and a second one makes this
           # `-qq`, which deletes the summary line this step reads the skip count from.
-          uv run pytest -rs 2>&1 | tee "$RUNNER_TEMP/pytest.log"
+          uv run --extra dev --extra browser-auth pytest -rs 2>&1 | tee "$RUNNER_TEMP/pytest.log"
           # A skip is a test that did not run, and `-q` buries the count. Surface
           # the summary as an annotation and list every skip with its reason, so
           # "1200 passed, 5 skipped" can never be read as "everything ran".
@@ -70,7 +70,7 @@ jobs:
           # asyncio_mode = "auto" is set in pyproject.toml. That setting is the
           # only thing making them run, so assert the count: a revert has to fail
           # the build rather than quietly leave half the MCP surface untested.
-          out=$(uv run pytest tests/test_unified_mcp.py --no-cov -p no:cacheprovider)
+          out=$(uv run --extra dev --extra browser-auth pytest tests/test_unified_mcp.py --no-cov -p no:cacheprovider)
           echo "$out"
           echo "$out" | grep -qE '^36 passed' || {
             echo "::error::expected 36 passed from test_unified_mcp.py; asyncio_mode = \"auto\" in pyproject.toml is what makes its 25 async tests execute. Bump this count in ci.yml if the file legitimately gained or lost a test."
