@@ -12,6 +12,21 @@ to `map_site`. The default allowlist is empty. A tool call cannot edit it. Domai
 authorization includes cookie subdomains within that domain; it does not permit
 another top-level map call for a subdomain absent from the exact allowlist.
 
+The same shape gates the two other operator-owned ingresses. `map_site` and
+`verify_chart` accept a `cdp_endpoint` only if the exact loopback endpoint is
+listed in `ASTROLABE_CDP_ENDPOINTS`, and `register_session` may store a credential
+for a domain only if that exact domain is listed in `ASTROLABE_SESSION_DOMAINS`.
+Both allowlists are empty by default and no tool argument can widen either one.
+
+`ASTROLABE_SESSION_DOMAINS` exists because the agent is now a credential
+*origin*, not only a credential consumer. Every other path here starts with
+something the operator already staged; this one lets the caller decide when a
+secret enters the system, which puts the agent's own process, its memory, and its
+transcript in scope, and those are exactly the surfaces the concessions below
+already say we cannot defend. The delta is spelled out, once, in
+[Agent-held sessions](#agent-held-sessions); the rest of this document's
+limitations apply to it unchanged.
+
 Import reads only the selected current-user profile and registrable domain using
 read-only SQLite. Public suffixes, symlinked paths, wrong owners, unsupported
 encryption, invalid padding and failed modern host binding are rejected. Only
@@ -84,6 +99,30 @@ tool argument can set it, and the server reads it once at startup. Either way
 in-process call, and each call's stderr is written to the same mode-0600 log
 file the response's `log` key points at, so the two dispatch paths return the
 same envelope.
+
+## Instrumentation
+
+Both MCP servers run on FastMCP 4, whose OpenTelemetry instrumentation is on by
+default. astrolabe did not add OTel and does not want it: the SDK migration
+deliberately took no OTel dependency, so as installed nothing is exported, and a
+span that exists only when an operator has separately configured an SDK and
+exporter is not a control this tool can make a claim about.
+
+The vendor setting is the documented one, because adding an astrolabe-prefixed
+alias would duplicate a supported control and could not express a future mode
+value. `FASTMCP_TELEMETRY_MODE` takes `native` (the default; FastMCP calls the OTel
+API, so span creation is a no-op unless an SDK and exporter are configured),
+`propagation_only` (extract and inject trace context, create no spans of its own),
+or `off` (FastMCP touches no OTel context at all, inbound or outbound). An
+operator who configures a collector inherits FastMCP's MCP spans; an operator who
+wants none sets `off`. No tool argument selects or widens this, in the same sense
+as the allowlists above.
+
+What that means for a reader of this document: the controls described here are
+about what the process does with credentials and evidence, and none of them
+depends on a span being emitted. Setting the mode to `off` removes
+instrumentation without removing a control, and nothing in this document should
+be read as a claim about telemetry.
 
 ## Agent-held sessions
 
@@ -184,9 +223,21 @@ absent. This is coverage of this page load, not Instagram's whole backend.
 | QuickPromotionSupportIGSchemaBatchFetchQuery | Yes | Not attempted |
 | PolarisStoriesV3AdsPoolQuery | Yes | Not attempted |
 
-Proof is recorded in `verification.jsonl` and summarized in
-`active-verification.json` beside the chart. Neither contains arguments,
-credentials or response data. Three observed REST writes remain gated.
+Proof is recorded by `astrolabe contract --execute` in the artifacts below,
+beside the chart. None of them contains arguments, credentials or response data.
+Three observed REST writes remain gated.
+
+| artifact | written by | shape |
+|---|---|---|
+| `verify.json` | `astrolabe contract --execute` | the per-operation verification record, keyed by operation |
+| `active-verification.json` | `astrolabe contract --execute` | the same records as a list, each with the derived `ok` flag `mcp-gen --require-active-proof` reads |
+| `verification.jsonl` | the Chart MCP server (`astrolabe-mcp`) | one appended value-free proof record per verified call, beside the toolpack |
+
+The two writers are different processes and the three names are not
+interchangeable. The Chart MCP server's journal is a durability log for calls
+made through a served Chart, not an input to `mcp-gen`; `mcp-gen --require-active-proof`
+reads `active-verification.json` and refuses rather than falling back to either of
+the other two.
 The artifact manifest validates with no checksum failures. Strict TLS was used;
 no cookie/auth/HAR file remains in the chart, and no Instagram capture/verification
 tmpfs directory remained after completion. Decryption was authorized for this
