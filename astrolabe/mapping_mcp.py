@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import hashlib
+import io
 import json
 import os
 import re
 import secrets
 import stat
 import sys
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -25,6 +28,14 @@ from mcp.types import ToolAnnotations
 from .browser import validate_cdp_endpoint
 from .recipe import parse_declarative_recipe
 from .security import DENIED_HEADERS, normalize_host, safe_text, validate_url
+
+# The only commands that run on the server's own interpreter instead of a spawned
+# `python -m astrolabe.cli`. Both read from disk and finish in seconds, and a
+# per-call interpreter start cost more wall-clock than the command itself. Everything
+# that drives a browser, converts evidence, or replays traffic stays spawned: a
+# browser must not share the server's process, and those runs are long enough that the
+# per-call log and the terminate/kill path are worth their cost.
+IN_PROCESS_COMMANDS = frozenset({"mcp-gen", "preflight"})
 
 CATEGORIES = frozenset(
     {
@@ -199,6 +210,47 @@ def _scan_accounting(out: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return dict(sorted(grouped.items())), budget
 
 
+def dispatch_in_process(arguments: list[str], *, cwd: Path) -> tuple[int, str, str]:
+    """Run one CLI command on this interpreter: (exit_code, stdout, stderr).
+
+    cli.main() writes its machine envelope to the last stdout line exactly as a
+    subprocess would, so run() parses both paths with the same code instead of
+    reimplementing the envelope for the in-process one.
+
+    Three process-wide things are saved and restored rather than assumed clean, and
+    each is a leak into the *next* call rather than a fault in this one:
+
+    - sys.argv, which cmd_mcpgen (cli.py:1093) and the shared map/import-har tail
+      (cli.py:683) overwrite and never put back.
+    - the working directory, which the subprocess path pinned to the workspace and
+      which profile.find_config_file() reads when it looks for astrolabe.toml.
+    - stdout/stderr, so the CLI's progress lines land in this call's log file
+      instead of corrupting the MCP server's own stdio transport.
+
+    This runs on the calling thread rather than in a worker: cli.main() installs a
+    SIGTERM handler, which Python only permits on the main thread. The cost is that
+    the event loop is blocked for the duration and the run cannot be timed out, which
+    is why only the two short non-browser commands come through here.
+    """
+    from . import cli
+
+    saved_argv, saved_cwd = sys.argv, os.getcwd()
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    try:
+        sys.argv = ["astrolabe", *arguments, "--json"]
+        os.chdir(cwd)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                cli.main()
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+    finally:
+        sys.argv = saved_argv
+        os.chdir(saved_cwd)
+    return code, out.getvalue(), err.getvalue()
+
+
 def create_server(
     workspace: Path | None = None,
     *,
@@ -242,6 +294,18 @@ def create_server(
         normalize_host(domain)
         for domain in _operator_list(session_domains, "ASTROLABE_SESSION_DOMAINS")
     )
+    # Isolation escape hatch. Set ASTROLABE_MCP_SPAWN=1 and every command goes back to
+    # `python -m astrolabe.cli`, one interpreter per call. It exists because in-process
+    # dispatch is a trade, not a free win: a hung in-process run cannot be timed out and
+    # it holds the event loop for its duration, so an operator who needs either back can
+    # have both without a code change. Operator-owned, like the three settings above --
+    # no tool argument can set it.
+    spawn_only = os.environ.get("ASTROLABE_MCP_SPAWN", "").strip().lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+    }
     server = FastMCP(
         "astrolabe",
         mask_error_details=True,
@@ -372,55 +436,77 @@ def create_server(
                 "cookies_file for interactive capture"
             )
 
-    async def run(arguments: list[str], timeout: int, label: str) -> dict:
+    def new_run_log(label: str) -> Path:
+        """The per-call log, created 0600 and empty. Both paths write into it, so an
+        in-process call and a spawned one hand the caller the same kind of file."""
         logs = root / ".astrolabe" / "logs"
         logs.mkdir(mode=0o700, parents=True, exist_ok=True)
         log_path = logs / f"{label}-{uuid4().hex[:12]}.log"
         descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as log_handle:
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "astrolabe.cli",
-                *arguments,
-                "--json",
-                cwd=root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=log_handle,
-                # Source checkouts work even before installing the console entry point.
-                env={
-                    **os.environ,
-                    "PYTHONPATH": os.pathsep.join(
-                        filter(
-                            None,
-                            [
-                                str(Path(__file__).resolve().parent.parent),
-                                os.environ.get("PYTHONPATH"),
-                            ],
-                        )
-                    ),
-                },
-            )
-            try:
-                output, _ = await asyncio.wait_for(process.communicate(), timeout)
-            except TimeoutError:
-                return {
-                    "ok": False,
-                    "category": "timeout",
-                    "message": f"{label} exceeded {timeout}s",
-                    "log": str(log_path.relative_to(root)),
-                }
-            finally:
-                if process.returncode is None:
-                    process.terminate()
-                    try:
-                        await asyncio.wait_for(process.wait(), 15)
-                    except TimeoutError:
-                        process.kill()
-                        await process.wait()
+        os.close(descriptor)
+        return log_path
+
+    async def run(arguments: list[str], timeout: int, label: str) -> dict:
+        log_path = new_run_log(label)
+        output: str
+        exit_code: int | None
+        if (
+            arguments[0] in IN_PROCESS_COMMANDS
+            and not spawn_only
+            and threading.current_thread() is threading.main_thread()
+        ):
+            exit_code, output, captured = dispatch_in_process(arguments, cwd=root)
+            # The subprocess path handed the child this same file as its stderr, so
+            # `log` keeps meaning "this run's stderr" rather than becoming a null with
+            # a note explaining that there is nothing to point at.
+            log_path.write_text(captured)
+        else:
+            with log_path.open("wb") as log_handle:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "astrolabe.cli",
+                    *arguments,
+                    "--json",
+                    cwd=root,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=log_handle,
+                    # Source checkouts work even before installing the console entry point.
+                    env={
+                        **os.environ,
+                        "PYTHONPATH": os.pathsep.join(
+                            filter(
+                                None,
+                                [
+                                    str(Path(__file__).resolve().parent.parent),
+                                    os.environ.get("PYTHONPATH"),
+                                ],
+                            )
+                        ),
+                    },
+                )
+                try:
+                    raw, _ = await asyncio.wait_for(process.communicate(), timeout)
+                    output = raw.decode()
+                except TimeoutError:
+                    return {
+                        "ok": False,
+                        "category": "timeout",
+                        "message": f"{label} exceeded {timeout}s",
+                        "log": str(log_path.relative_to(root)),
+                    }
+                finally:
+                    if process.returncode is None:
+                        process.terminate()
+                        try:
+                            await asyncio.wait_for(process.wait(), 15)
+                        except TimeoutError:
+                            process.kill()
+                            await process.wait()
+            exit_code = process.returncode
         result: dict = {
-            "ok": process.returncode == 0,
-            "exit_code": process.returncode,
+            "ok": exit_code == 0,
+            "exit_code": exit_code,
             "log": str(log_path.relative_to(root)),
         }
         try:
@@ -429,7 +515,7 @@ def create_server(
             envelope = {}
         if not isinstance(envelope, dict):
             envelope = {}
-        if process.returncode:
+        if exit_code:
             error = envelope.get("error")
             category = error.get("category") if isinstance(error, dict) else None
             if isinstance(error, dict) and category in CATEGORIES:

@@ -1933,16 +1933,14 @@ def main(argv=None):
         if progress is not None:
             if progress.getvalue():
                 print(progress.getvalue(), end="", file=sys.stderr)
-            print(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "command": a.cmd,
-                        "result": result if result is not None else {},
-                    },
-                    sort_keys=True,
-                )
-            )
+            # "result" is present only when the command actually returned something.
+            # Synthesising {} for a command that returns None made every such command
+            # (mcp-gen, map, scan, contract) look like it had produced an empty payload,
+            # and a caller could not tell the two apart.
+            envelope = {"ok": True, "command": a.cmd}
+            if result is not None:
+                envelope["result"] = result
+            print(json.dumps(envelope, sort_keys=True))
     except CLIError as exc:
         _emit_cli_failure(
             machine=a.json,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from pathlib import Path
@@ -14,7 +15,7 @@ from astrolabe.mapping_mcp import create_server
 
 @pytest.mark.asyncio
 async def test_native_map_uses_export_and_recovery_without_exposing_secrets(tmp_path, monkeypatch):
-    calls = []
+    calls, dispatched = [], []
 
     class Process:
         returncode = 0
@@ -27,6 +28,7 @@ async def test_native_map_uses_export_and_recovery_without_exposing_secrets(tmp_
         return Process()
 
     monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
     cookies = tmp_path / "cookies.json"
     cookies.write_text('[{"value":"credential-secret"}]')
     cookies.chmod(0o600)
@@ -41,13 +43,14 @@ async def test_native_map_uses_export_and_recovery_without_exposing_secrets(tmp_
             },
         )
     assert result.data["ok"] is True
-    capture, generation = [args for args, _ in calls]
+    capture = calls[0][0]
+    generation = dispatched[0][0]
     assert capture[2] == "astrolabe.cli"
     assert "--recover-persisted" in capture
     assert "--cookies-file" in capture
     assert "--browser" not in capture
     assert capture[capture.index("--max-total-requests") + 1] == "100"
-    assert generation[3] == "mcp-gen"
+    assert generation[0] == "mcp-gen"
     assert "credential-secret" not in json.dumps(result.data)
 
 
@@ -94,9 +97,15 @@ async def test_generation_failure_does_not_claim_chart_success(tmp_path, monkeyp
 
     async def subprocess(*args, **kwargs):
         calls.append(args)
-        return Process(0 if len(calls) == 1 else 8)
+        return Process(0)
 
     monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    monkeypatch.setattr(
+        "astrolabe.mapping_mcp.dispatch_in_process",
+        _in_process_cli(
+            [], {"ok": False, "error": {"category": "generation", "message": "x"}}, code=8
+        ),
+    )
     async with Client(create_server(tmp_path)) as client:
         result = await client.call_tool("map_site", {"domain": "example.com"})
     assert result.data["ok"] is False
@@ -114,7 +123,7 @@ async def test_chart_path_cannot_escape_workspace(tmp_path):
 
 @pytest.mark.asyncio
 async def test_native_browser_import_is_forwarded_to_capture(tmp_path, monkeypatch):
-    calls = []
+    calls, dispatched = [], []
 
     class Process:
         returncode = 0
@@ -127,6 +136,7 @@ async def test_native_browser_import_is_forwarded_to_capture(tmp_path, monkeypat
         return Process()
 
     monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
     async with Client(create_server(tmp_path, browser_auth_domains=frozenset({"x.com"}))) as client:
         result = await client.call_tool(
             "map_site",
@@ -148,12 +158,12 @@ async def test_native_browser_import_is_forwarded_to_capture(tmp_path, monkeypat
     assert "--recover-persisted" not in capture
     assert capture[capture.index("--crawl") + 1] == "4"
     assert "--block-assets" in capture
-    assert "--include-mutations" in calls[1]
+    assert "--include-mutations" in dispatched[0][0]
 
 
 @pytest.mark.asyncio
 async def test_generate_chart_mutations_require_explicit_opt_in(tmp_path, monkeypatch):
-    calls = []
+    calls, dispatched = [], []
 
     class Process:
         returncode = 0
@@ -166,14 +176,17 @@ async def test_generate_chart_mutations_require_explicit_opt_in(tmp_path, monkey
         return Process()
 
     monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
     (tmp_path / "capture").mkdir()
     async with Client(create_server(tmp_path)) as client:
         await client.call_tool("generate_chart", {"capture_directory": "capture"})
         await client.call_tool(
             "generate_chart", {"capture_directory": "capture", "include_mutations": True}
         )
-    assert "--include-mutations" not in calls[0]
-    assert "--include-mutations" in calls[1]
+    assert not calls, "generate_chart spawned a subprocess"
+    assert len(dispatched) == 2
+    assert "--include-mutations" not in dispatched[0][0]
+    assert "--include-mutations" in dispatched[1][0]
 
 
 @pytest.mark.asyncio
@@ -210,6 +223,22 @@ def _recording_subprocess(calls, envelopes=None, on_call=None):
     return subprocess
 
 
+def _in_process_cli(calls, envelope: dict | None = None, code: int = 0):
+    """A double for the in-process CLI path that honours the contract it stands in for.
+
+    dispatch_in_process returns (exit_code, stdout, stderr) and cli.main() writes its
+    envelope to the last stdout line, so the double writes the same line. A double that
+    returned something else would pass a test run() cannot pass in production.
+    """
+    payloads = envelope if envelope is not None else {"ok": True, "command": "mcp-gen"}
+
+    def dispatch(arguments, *, cwd):
+        calls.append((list(arguments), cwd))
+        return code, json.dumps(payloads) + "\n", ""
+
+    return dispatch
+
+
 @pytest.mark.asyncio
 async def test_refusal_reasons_reach_the_caller(tmp_path, monkeypatch):
     monkeypatch.setattr(
@@ -238,6 +267,7 @@ async def test_refusal_reasons_reach_the_caller(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_actions_become_a_private_recipe_removed_after_capture(tmp_path, monkeypatch):
     calls, seen = [], {}
+    dispatched: list = []
 
     def inspect(args, _kwargs):
         if "--recipe" in args:
@@ -250,6 +280,7 @@ async def test_actions_become_a_private_recipe_removed_after_capture(tmp_path, m
         "astrolabe.mapping_mcp.asyncio.create_subprocess_exec",
         _recording_subprocess(calls, on_call=inspect),
     )
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
     actions = [
         {
             "action": "search",
@@ -357,7 +388,7 @@ async def test_solve_challenge_returns_cookie_file_and_agent_not_values(tmp_path
 
 @pytest.mark.asyncio
 async def test_verify_chart_defaults_to_anonymous_and_regenerates(tmp_path, monkeypatch):
-    calls = []
+    calls, dispatched = [], []
     chart = tmp_path / "chart-example.com-1"
     chart.mkdir()
     (chart / "endpoints.json").write_text('{"base_domain": "example.com"}')
@@ -368,16 +399,18 @@ async def test_verify_chart_defaults_to_anonymous_and_regenerates(tmp_path, monk
     monkeypatch.setattr(
         "astrolabe.mapping_mcp.asyncio.create_subprocess_exec", _recording_subprocess(calls)
     )
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
     async with Client(create_server(tmp_path)) as client:
         result = await client.call_tool(
             "verify_chart",
             {"capture_directory": chart.name, "seeds": ["https://example.com/a"]},
         )
-    verify, generation = calls[0][0], calls[1][0]
+    verify = calls[0][0]
+    assert len(calls) == 1, f"verify_chart spawned {len(calls)} processes, expected one"
     assert verify[3:6] == ("contract", str(chart), "--execute")
     assert "--no-auth" in verify
     assert verify[verify.index("--seeds") + 1] == "https://example.com/a"
-    assert generation[3] == "mcp-gen"
+    assert dispatched[0][0][0] == "mcp-gen"
     assert result.data["verified_active"] == ["GET /api/a"]
 
 
@@ -1114,3 +1147,273 @@ async def test_scan_accounting_is_empty_not_invented_when_there_is_no_artifact(t
     junk.mkdir()
     (junk / "scan.json").write_text("{not json")
     assert _scan_accounting(junk) == ({}, {})
+
+
+# ----- the response envelope every mapping tool returns ------------------------
+#
+# run() builds one envelope shape and every tool adds its own keys to it, so the
+# shape is the contract an agent reads and this pins it key for key. It is a
+# characterization test, not a preference: a key appearing or disappearing is a
+# change to what a caller can rely on, and the diff is where that gets decided.
+
+# The nested envelope a generation step returns, wherever it is nested. Its "result"
+# is popped and the toolpack path is lifted onto the outer envelope, so three keys.
+_GENERATION_KEYS = {"ok", "exit_code", "log"}
+
+# generate_chart carried "result": {} until todo 23 removed it: cmd_mcpgen returns None
+# and cli.main() used to turn that into {}, which run() forwarded as if generation had
+# produced a payload. cli.main() now omits the key when a command returns nothing, and
+# the baseline that recorded the old shape is in .omo/start-work/ledger.jsonl.
+_ENVELOPE_SHAPES = {
+    "preflight": {"ok", "exit_code", "log", "result"},
+    "generate_chart": {"ok", "exit_code", "log", "toolpack"},
+    "scan_site": {
+        "ok",
+        "exit_code",
+        "log",
+        "scan_directory",
+        "produces",
+        "does_not_produce",
+        "sources",
+        "budget",
+        "scanned_at",
+    },
+    "map_site": {"ok", "exit_code", "log", "capture_directory", "chart", "toolpack"},
+    "import_har": {
+        "ok",
+        "exit_code",
+        "log",
+        "capture_directory",
+        "entries_kept",
+        "entries_total",
+        "chart",
+        "toolpack",
+    },
+    "solve_challenge": {"ok", "exit_code", "log", "cookies_file", "cookie_names", "user_agent"},
+    "verify_chart": {"ok", "exit_code", "log", "verified_active", "chart", "toolpack"},
+}
+
+
+@pytest.mark.asyncio
+async def test_every_mapping_tool_returns_the_same_envelope_shape(tmp_path, monkeypatch):
+    """One assertion per tool, each with the setup that tool needs to reach its
+    success path. A tool that starts returning a different key set fails here."""
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    fixture = Path(__file__).parent / "fixtures" / "sample.har.json"
+    (tmp_path / "capture.har").write_text(fixture.read_text())
+    (tmp_path / "chart").mkdir()
+    (tmp_path / "chart" / "endpoints.json").write_text('{"base_domain": "example.com"}')
+    served = {
+        # The real cmd_preflight returns its readiness report, so the double has to as
+        # well: a faithful double is what makes "result" present for preflight and
+        # absent for generate_chart a fact about the commands, not about this test.
+        "preflight": {"host": "local"},
+        "generate_chart": {},
+        "scan_site": {},
+        "map_site": {},
+        "import_har": {},
+        "solve_challenge": {
+            "cookie_names": ["__cf_bm"],
+            "user_agent": "Solver/1.0",
+        },
+        "verify_chart": {},
+    }
+    arguments = {
+        "preflight": {},
+        "generate_chart": {"capture_directory": capture.name},
+        "scan_site": {"url": "https://example.com/"},
+        "map_site": {"domain": "example.com"},
+        "import_har": {"har_file": "capture.har", "domain": "example.com"},
+        "solve_challenge": {"url": "https://example.com/app"},
+        "verify_chart": {"capture_directory": "chart"},
+    }
+    for tool, expected in _ENVELOPE_SHAPES.items():
+        calls: list[tuple] = []
+        dispatched: list = []
+        # Every run of this tool answers ok, and the ones that carry a payload carry the
+        # same one, so a shape difference is the tool's and not the double's.
+        monkeypatch.setattr(
+            "astrolabe.mapping_mcp.asyncio.create_subprocess_exec",
+            _recording_subprocess(calls, [{"ok": True, "result": served[tool]}] * 4),
+        )
+        monkeypatch.setattr(
+            "astrolabe.mapping_mcp.dispatch_in_process",
+            _in_process_cli(
+                dispatched,
+                {"ok": True, "command": tool, **({"result": served[tool]} if served[tool] else {})},
+            ),
+        )
+        async with Client(create_server(tmp_path)) as client:
+            result = await client.call_tool(tool, arguments[tool])
+        data = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
+        assert data["ok"] is True, f"{tool} did not reach its success path: {data}"
+        assert set(data) == expected, f"{tool} envelope changed shape"
+        if "chart" in expected:
+            assert set(data["chart"]) == _GENERATION_KEYS, f"{tool} chart envelope changed shape"
+
+
+# ----- dispatch: in-process for the cheap commands, spawned for everything else ----
+
+_LOCAL_CAPTURE = {"domain": "example.com", "seeds": ["https://example.com/"]}
+# A sentinel rather than a literal host: the resolved profile host depends on whatever
+# astrolabe.toml this machine has, and the payload shape is what is under test.
+_PREFLIGHT_STUB = "in-process-stub"
+
+
+def _stubbed_preflight(hp, verbose=True):
+    return {"host": hp.host, "probe": _PREFLIGHT_STUB}
+
+
+def _no_spawn(monkeypatch):
+    """Make any subprocess spawn a hard failure, so a test can assert on the spawn
+    count itself rather than infer it from a latency that would look fine either way."""
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError(f"unexpected subprocess spawn: {args[1:4]}")
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", forbidden)
+
+
+@pytest.fixture(autouse=False)
+def _stub_preflight_environment(monkeypatch):
+    """The real cmd_preflight probes the host for browsers and proxies. The dispatch is
+    what is under test here, so only that probe is replaced -- cmd_preflight itself,
+    the argument parse and the envelope construction all still run."""
+    monkeypatch.setattr("astrolabe.cli.preflight", _stubbed_preflight)
+
+
+@pytest.mark.asyncio
+async def test_preflight_runs_without_spawning_a_subprocess(
+    tmp_path, monkeypatch, _stub_preflight_environment
+):
+    """Acceptance: zero spawns. The assertion is the spawn itself raising, not the
+    wall-clock, because a silent fall back to a subprocess would still look fast."""
+    _no_spawn(monkeypatch)
+    async with Client(create_server(tmp_path)) as client:
+        result = await client.call_tool("preflight", {})
+    assert result.data["ok"] is True
+    assert result.data["result"]["probe"] == _PREFLIGHT_STUB
+    log = tmp_path / result.data["log"]
+    assert log.is_file() and log.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_map_site_spawns_only_the_capture_process(tmp_path, monkeypatch):
+    """Acceptance: at most one spawn. The capture must stay isolated -- a browser is
+    not safe to run in the server's own interpreter -- so the one spawn that remains
+    is the capture, and generation is the command that moved in-process."""
+    calls: list[tuple] = []
+    dispatched: list = []
+    monkeypatch.setattr(
+        "astrolabe.mapping_mcp.asyncio.create_subprocess_exec",
+        _recording_subprocess(calls, [{"ok": True}, {"ok": True}]),
+    )
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
+    async with Client(create_server(tmp_path)) as client:
+        result = await client.call_tool("map_site", _LOCAL_CAPTURE)
+    assert result.data["ok"] is True
+    assert len(calls) == 1, f"map_site spawned {len(calls)} processes"
+    assert calls[0][0][3] == "map", "the surviving spawn is not the capture"
+    assert dispatched and dispatched[0][0][0] == "mcp-gen"
+
+
+@pytest.mark.asyncio
+async def test_the_browser_commands_are_never_dispatched_in_process():
+    """A browser must not share the server's interpreter, and this set is the guard."""
+    from astrolabe.mapping_mcp import IN_PROCESS_COMMANDS
+
+    assert frozenset({"mcp-gen", "preflight"}) == IN_PROCESS_COMMANDS
+
+
+@pytest.mark.asyncio
+async def test_operator_can_force_every_command_back_into_a_subprocess(tmp_path, monkeypatch):
+    """The escape hatch: one operator setting restores the pre-todo-23 dispatch for
+    everything, including the two commands that now run in-process."""
+    monkeypatch.setenv("ASTROLABE_MCP_SPAWN", "1")
+    calls: list[tuple] = []
+    dispatched: list = []
+    monkeypatch.setattr(
+        "astrolabe.mapping_mcp.asyncio.create_subprocess_exec", _recording_subprocess(calls)
+    )
+    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
+    (tmp_path / "capture").mkdir()
+    async with Client(create_server(tmp_path)) as client:
+        await client.call_tool("generate_chart", {"capture_directory": "capture"})
+    assert not dispatched, "ASTROLABE_MCP_SPAWN did not stop the in-process dispatch"
+    assert len(calls) == 1
+    assert calls[0][0][3] == "mcp-gen"
+
+
+@pytest.mark.asyncio
+async def test_in_process_dispatch_restores_sys_argv_and_cwd(tmp_path, monkeypatch):
+    """cli.cmd_mcpgen assigns sys.argv and never puts it back, so an in-process
+    dispatch that did not restore it would change the *next* call, not this one."""
+    import os
+    import sys
+
+    from astrolabe import cli
+
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    (capture / "endpoints.json").write_text(
+        json.dumps({"base_domain": "example.com", "operations": [], "rest": []})
+    )
+    before_argv, before_cwd = list(sys.argv), os.getcwd()
+    # First prove the leak this guards is real, so the restore below cannot pass
+    # vacuously against a CLI that had stopped clobbering argv.
+    with contextlib.suppress(SystemExit):
+        cli.main(["mcp-gen", str(capture), "--json"])
+    assert sys.argv != before_argv, "cmd_mcpgen no longer leaks sys.argv; re-check this test"
+    sys.argv = list(before_argv)
+
+    async with Client(create_server(tmp_path)) as client:
+        result = await client.call_tool("generate_chart", {"capture_directory": "capture"})
+    # Nothing to generate from an empty inventory, so the command fails -- having run.
+    assert result.data["ok"] is False
+    assert result.data["category"] == "upstream"
+    assert sys.argv == before_argv
+    assert os.getcwd() == before_cwd
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_capture_terminates_its_child_and_cleans_up(tmp_path, monkeypatch):
+    """In-process execution shares the server's state, so a capture interrupted
+    mid-run must leave nothing behind: the spawned child is terminated rather than
+    orphaned, and the next in-process call still answers a full envelope."""
+    state = {"terminated": False, "killed": False}
+
+    class Process:
+        returncode = None
+
+        async def communicate(self):
+            await asyncio.sleep(30)
+            return b"", b""
+
+        def terminate(self):
+            state["terminated"] = True
+            self.returncode = -15
+
+        def kill(self):
+            state["killed"] = True
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def subprocess(*args, **kwargs):
+        return Process()
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
+    monkeypatch.setattr("astrolabe.cli.preflight", _stubbed_preflight)
+    async with Client(create_server(tmp_path)) as client:
+        capture = asyncio.ensure_future(client.call_tool("map_site", _LOCAL_CAPTURE))
+        await asyncio.sleep(0.05)
+        capture.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await capture
+        result = await client.call_tool("preflight", {})
+    assert state["terminated"] is True, "the interrupted capture was left running"
+    assert state["killed"] is False, "a child that honoured terminate was also killed"
+    assert result.data["ok"] is True
+    assert result.data["result"]["probe"] == _PREFLIGHT_STUB
