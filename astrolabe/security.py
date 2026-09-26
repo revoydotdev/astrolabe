@@ -18,9 +18,9 @@ import urllib.parse as up
 import zlib
 
 try:
-    from .payloads import decode_payload, PackagingError
+    from .payloads import DecodedPayload, decode_payload, PackagingError
 except ImportError:  # flat capture-host deployment
-    from payloads import decode_payload, PackagingError  # type: ignore[import-not-found,no-redef]
+    from payloads import DecodedPayload, decode_payload, PackagingError  # type: ignore[import-not-found,no-redef]
 from collections.abc import Mapping
 from typing import Any
 
@@ -117,7 +117,6 @@ def atomic_write_bytes(
 
 def atomic_write_json(path: str | os.PathLike[str], value: Any, *, mode: int = 0o644) -> None:
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-    json.loads(payload)
     atomic_write_bytes(path, payload, mode=mode)
 
 
@@ -383,8 +382,15 @@ def request_metadata(
     max_body_bytes: int = 2_000_000,
     shape_counters: dict[str, int] | None = None,
     shape_limits: dict[str, int] | None = None,
+    decoded_payload: DecodedPayload | None = None,
 ) -> dict[str, Any]:
-    """Return bounded structural request metadata without retaining values."""
+    """Return bounded structural request metadata without retaining values.
+
+    `decoded_payload` is what a caller that already ran `decode_payload` on these same
+    bytes hands back, so a body is inflated once per request instead of once here and
+    again at the call site. None means "not decoded yet", so callers without one keep
+    working unchanged.
+    """
     if body is None:
         return {}
     raw = body if isinstance(body, bytes) else str(body).encode("utf-8", "replace")
@@ -394,19 +400,39 @@ def request_metadata(
     }
     if content_encoding:
         result["request_content_encoding"] = content_encoding.lower()
-    decoded, body_truncated = _decode_bounded(raw, content_encoding, max_body_bytes)
-    if body_truncated:
+    parsed: Any = None
+
+    def mark_body_budget() -> None:
         counters = shape_counters if shape_counters is not None else {}
         counters["body_byte_budget"] = counters.get("body_byte_budget", 0) + 1
         result["request_truncated"] = {"reason": "body_byte_budget"}
-    parsed: Any = None
+
     try:
-        payload = decode_payload(
-            raw, media_type=media_type, content_encoding=content_encoding, max_bytes=max_body_bytes
+        payload = (
+            decoded_payload
+            if decoded_payload is not None
+            else decode_payload(
+                raw,
+                media_type=media_type,
+                content_encoding=content_encoding,
+                max_bytes=max_body_bytes,
+            )
         )
+        if "," in content_encoding:
+            # A multi-coded content-encoding has always counted against the body budget,
+            # because _decode_bounded reads the whole header as one coding. decode_payload
+            # unwraps the list instead, so the decode succeeds and that count would
+            # otherwise stop happening.
+            mark_body_budget()
         parsed = payload.value
         result["request_packaging"] = list(payload.layers)
     except Exception:
+        # Only the non-JSON fallbacks below need inflated bytes, and every other
+        # over-budget or undecodable body still lands here, so the bounded inflate
+        # runs only when the decode could not be trusted to have bounded it.
+        decoded, body_truncated = _decode_bounded(raw, content_encoding, max_body_bytes)
+        if body_truncated:
+            mark_body_budget()
         if "multipart/form-data" in media_type:
             parsed = _multipart_shape(decoded)
         elif "application/x-www-form-urlencoded" in media_type:

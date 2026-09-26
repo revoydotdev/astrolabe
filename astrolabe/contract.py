@@ -102,6 +102,11 @@ def build_from_capture(capture_dir):
     # its schemas come from the document, not observed traffic. Absence is normal.
     cap_path = os.path.join(capture_dir, "capture.jsonl")
     if graph is not None:
+        # The graph IS the evidence here, not capture.jsonl, so this is not redundant
+        # with whatever the caller already parsed: handing it pre-parsed records would
+        # change the contract, not just the cost of building it. Measured on the
+        # analyze -> contract tail, a `map` run parses capture.jsonl exactly once (in
+        # analyze.load) precisely because render() has already written graph.json.
         evidence_records = evidence_records_from_graph(graph)
     else:
         cap_lines = open(cap_path) if os.path.exists(cap_path) else []
@@ -573,7 +578,7 @@ def render_md(contract, drift=None):
         "|---|---|---|---|---|---|",
     ]
     for k, o in sorted(contract["operations"].items()):
-        imported = (((o.get("proof") or {}).get("observed") or {}).get("source") == "har-import")
+        imported = ((o.get("proof") or {}).get("observed") or {}).get("source") == "har-import"
         st = {
             "verified-active": "✅ active",
             "verified-observed": "🟢 imported" if imported else "🟢 observed",

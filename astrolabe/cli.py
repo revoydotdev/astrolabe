@@ -707,7 +707,6 @@ def _analyze_contract_and_seal(
     ]
     from .artifact import build_manifest, utc_now, write_manifest
 
-    meta = json.load(open(os.path.join(out, "meta.json")))
     now = utc_now()
     manifest = build_manifest(
         out,

@@ -11,6 +11,7 @@ import tempfile
 import pytest
 
 import astrolabe.analyze as analyze
+import astrolabe.contract as contract
 import astrolabe.mcpgen as mcpgen
 
 # ---- generic default categorization ---------------------------------------
@@ -665,6 +666,122 @@ def test_render_and_mcpgen_reproduce_the_golden_projection_byte_for_byte():
                 )
             )[:4000]
         )
+
+
+def _staged_capture_dir(parent):
+    """A capture dir shaped exactly as `astrolabe map` leaves it when the contract
+    step runs: rendered first (so graph.json exists), with the raw capture alongside."""
+    recs = [json.loads(line) for line in _read_fixture("records.jsonl").splitlines()]
+    meta = json.loads(_read_fixture("meta.json"))
+    # A fixed directory name: build_from_capture falls back to the capture dir's
+    # basename for run_id when meta.json has none, and that lands in the contract's
+    # observed proof. A random tmp name would make the golden unmatchable.
+    tmp = os.path.join(parent, "capture")
+    os.mkdir(tmp)
+    analyze.render(tmp, recs, meta)
+    shutil.copy(
+        os.path.join(TEMPLATING_FIXTURE, "records.jsonl"), os.path.join(tmp, "capture.jsonl")
+    )
+    shutil.copy(os.path.join(TEMPLATING_FIXTURE, "meta.json"), os.path.join(tmp, "meta.json"))
+    return tmp
+
+
+def _golden_contract():
+    """Build the durable contract over the same fixture, the way `astrolabe map`
+    does: render() first (it writes the graph.json the contract then reads), then
+    the real build_from_capture. Kept beside the projection above so one fixture
+    guards both the inventory and the contract derived from it."""
+    with tempfile.TemporaryDirectory() as parent:
+        built = contract.build_from_capture(_staged_capture_dir(parent))
+    return json.dumps(built, indent=2, sort_keys=True) + "\n", contract.render_md(built, None)
+
+
+def test_contract_reproduces_the_golden_projection_byte_for_byte():
+    """The contract decides `observed` proof and every contract key, so sharing a
+    capture parse between analyze and contract must not be able to move one."""
+    expected_json, expected_md = (
+        _read_fixture("contract-golden.json"),
+        _read_fixture("contract-golden.md"),
+    )
+    actual_json, actual_md = _golden_contract()
+    if actual_json != expected_json or actual_md != expected_md:
+        pytest.fail(
+            "contract output moved. A loading change altered the evidence a contract "
+            "derives -- find which key before touching this file.\n"
+            + "\n".join(
+                __import__("difflib").unified_diff(
+                    (expected_json + expected_md).splitlines(),
+                    (actual_json + actual_md).splitlines(),
+                    "golden",
+                    "actual",
+                    lineterm="",
+                    n=1,
+                )
+            )[:4000]
+        )
+
+
+def test_golden_contract_covers_observed_proof_across_transports():
+    """Guards the fixture itself: a golden with no observed proof, or with only one
+    transport, would stop being evidence that the loading path is intact."""
+    built = json.loads(_golden_contract()[0])
+    statuses = {op["status"] for op in built["operations"].values()}
+    assert "verified-observed" in statuses
+    transports = {op["transport"] for op in built["operations"].values()}
+    assert {"graphql", "rest"} <= transports
+    observed = [op for op in built["operations"].values() if op["proof"]["observed"]["ok"]]
+    assert observed and all(
+        op["proof"]["observed"]["source"] == "astrolabe-capture" for op in observed
+    )
+
+
+def test_one_capture_parse_per_analyze_to_contract_tail(monkeypatch):
+    """Counts parses on the path `astrolabe map` actually takes.
+
+    render() writes graph.json before the contract step, so build_from_capture reads
+    the graph and never re-opens capture.jsonl: the tail parses it exactly once, in
+    analyze.load. meta.json is the file that was genuinely parsed twice, so this pins
+    the count rather than the reasoning -- if the graph ever stops being written, this
+    fails instead of quietly becoming a second full parse.
+    """
+    raw_records = [
+        line + "\n" for line in _read_fixture("records.jsonl").splitlines() if line.strip()
+    ]
+    fixture_lines = set(raw_records)
+    record_count = len(raw_records)
+    counts = {"capture.jsonl": 0, "meta.json": 0}
+    real_loads, real_load = json.loads, json.load
+
+    def counted_loads(payload, *args, **kwargs):
+        if payload in fixture_lines:
+            counts["capture.jsonl"] += 1
+        return real_loads(payload, *args, **kwargs)
+
+    def counted_load(handle, *args, **kwargs):
+        if os.path.basename(str(getattr(handle, "name", ""))) == "meta.json":
+            counts["meta.json"] += 1
+        return real_load(handle, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", counted_loads)
+    monkeypatch.setattr(json, "load", counted_load)
+
+    with tempfile.TemporaryDirectory() as parent:
+        out = _staged_capture_dir(parent)
+        # Measured from here, so the fixture parse inside the helper is not counted.
+        before = dict(counts)
+        recs, meta = analyze.load(out)
+        analyze.render(out, recs, meta)
+        assert contract.build_from_capture(out)
+        assert os.path.isfile(os.path.join(out, "graph.json"))
+        parsed = {name: counts[name] - before[name] for name in counts}
+        # One full pass over the file is one json.loads per record; a second pass
+        # would double this number.
+        assert parsed["capture.jsonl"] == record_count, (
+            f"capture.jsonl was parsed {parsed['capture.jsonl']}x for {record_count} records"
+        )
+        # Two, not three: analyze.load and build_from_capture. The third read, in
+        # _analyze_contract_and_seal, was meta.json being re-parsed for the manifest.
+        assert parsed["meta.json"] == 2, f"meta.json was parsed {parsed['meta.json']}x"
 
 
 def test_golden_projection_covers_both_templating_branches():

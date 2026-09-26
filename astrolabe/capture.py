@@ -17,6 +17,7 @@ Per-site recipe (--recipe file.py) may define:
 from __future__ import annotations
 import argparse, atexit, hashlib, json, os, re, signal, sys, time, importlib.util, urllib.request, urllib.parse as up
 from datetime import UTC, datetime
+from functools import lru_cache
 
 try:
     from astrolabe.browser import connect_context, launch_context
@@ -79,6 +80,7 @@ except ImportError:  # standalone deployment on the capture host
 
 API_HINT = re.compile(r"(graphql|/api/|/ab/|gql|\.json(\?|$)|/o/|/v\d/)", re.I)
 GQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+PERSISTED_PATH = re.compile(r"/graphql/([^/]+)/([_A-Za-z][_0-9A-Za-z]*)$")
 CF_MARKERS = re.compile(
     r"(just a moment|verifying you are human|cf-chl|challenge-platform|attention required)", re.I
 )
@@ -239,8 +241,20 @@ def graphql_entries(payload, live_url, media_type):
 
 def persisted_path(url):
     """Recognize exactly /graphql/<identifier>/<operation>, not legacy REST paths."""
-    match = re.search(r"/graphql/([^/]+)/([_A-Za-z][_0-9A-Za-z]*)$", up.urlparse(url).path)
+    match = PERSISTED_PATH.search(up.urlparse(url).path)
     return (match.group(1), match.group(2)) if match else None
+
+
+@lru_cache(maxsize=1024)
+def gql_names(query):
+    """Tokenise one query document into candidate names.
+
+    A page fires the same query text on every navigation, and a run re-tokenises it
+    once per response; the result is a pure function of the text, so it is cached
+    rather than recomputed. Capped, so an unbounded stream of distinct documents
+    cannot grow this without limit.
+    """
+    return tuple(GQL_NAME.findall(query))
 
 
 def response_payload(response, max_bytes, *, graphql=False):
@@ -1074,16 +1088,7 @@ def main(argv=None):
                 body = getattr(req, "post_data_buffer", None)
                 record_failure("request-body", "body-decode", exc, context=url)
             if body:
-                rec.update(
-                    request_metadata(
-                        body,
-                        req.headers.get("content-type", ""),
-                        content_encoding=req.headers.get("content-encoding", ""),
-                        max_body_bytes=a.body_max_bytes,
-                        shape_counters=SHAPE_TRUNCATIONS,
-                        shape_limits=SHAPE_LIMITS,
-                    )
-                )
+                decoded_request = None
                 try:
                     raw_request = body if isinstance(body, bytes) else body.encode("utf-8")
                     decoded_request = decode_payload(
@@ -1092,8 +1097,23 @@ def main(argv=None):
                         content_encoding=req.headers.get("content-encoding", ""),
                         max_bytes=a.body_max_bytes,
                     )
+                except Exception:
+                    pass
+                rec.update(
+                    request_metadata(
+                        body,
+                        req.headers.get("content-type", ""),
+                        content_encoding=req.headers.get("content-encoding", ""),
+                        max_body_bytes=a.body_max_bytes,
+                        shape_counters=SHAPE_TRUNCATIONS,
+                        shape_limits=SHAPE_LIMITS,
+                        decoded_payload=decoded_request,
+                    )
+                )
+                try:
+                    if decoded_request is None:
+                        raise PackagingError("request body is not decodable")
                     j = decoded_request.value
-                    rec["request_packaging"] = list(decoded_request.layers)
                     payloads = j if isinstance(j, list) else [j]
                     ops = []
                     for p in payloads:
@@ -1101,7 +1121,7 @@ def main(argv=None):
                             continue
                         if "query" in p or "operationName" in p or "extensions" in p:
                             q = p.get("query") or ""
-                            names.update(GQL_NAME.findall(q))
+                            names.update(gql_names(q))
                             if p.get("operationName"):
                                 names.add(p["operationName"])
                             ops.extend(
@@ -1173,7 +1193,7 @@ def main(argv=None):
             # only valid shape.
             content_type = req.headers.get("content-type", "").split(";", 1)[0].lower()
             if "graphql" not in rec and body and content_type == "application/graphql":
-                names.update(GQL_NAME.findall(body))
+                names.update(gql_names(body))
                 rec["graphql"] = graphql_entries({"query": body}, live_url, content_type)
                 path = up.urlparse(url).path
                 gql_endpoints.setdefault(path, {"count": 0})["count"] += 1
@@ -1192,7 +1212,7 @@ def main(argv=None):
                                 envelope[key] = json.loads(raw_value)
                             except Exception as exc:
                                 record_failure("graphql-get-envelope", "parse", exc, context=url)
-                    names.update(GQL_NAME.findall(query_text))
+                    names.update(gql_names(query_text))
                     rec["graphql"] = graphql_entries(envelope, live_url, content_type)
                     path = up.urlparse(url).path
                     gql_endpoints.setdefault(path, {"count": 0})["count"] += 1
@@ -1632,6 +1652,15 @@ def main(argv=None):
         if last_auth:
             ap_ = os.path.join(a.outdir, "auth.headers.json")
             atomic_write_json(ap_, {k: v for k, v in last_auth.items()}, mode=0o600)
+        # ponytail: a normal run hashes capture.jsonl twice — once here, once when
+        # atexit re-runs this function with nothing left to change. Measured on this
+        # box: 0.02 ms for a 34 KiB capture, 3.3 ms for a full-budget 5.7 MiB one
+        # (4000 records), 16.5 ms at a 28 MiB pathological size, against a browser
+        # session measured in tens of seconds. Skipping the second pass needs a
+        # "nothing changed" flag, and that flag can only be wrong in the direction
+        # that ships a stale checksum after an unclean exit -- so the cost stays.
+        # Ceiling: it stays linear in capture size. Upgrade path: hash the writes as
+        # they happen (a running digest per artifact) if that ever costs real time.
         checksums = {}
         for artifact_name in ("capture.jsonl", "meta.json", "graphql-names.txt"):
             artifact_path = os.path.join(a.outdir, artifact_name)

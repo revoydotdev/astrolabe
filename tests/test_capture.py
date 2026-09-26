@@ -262,6 +262,14 @@ def test_sigterm_flushes_a_complete_partial_capture_manifest(tmp_path):
     assert manifest["run_id"] == "cancel-test"
     for name, digest in manifest["sha256"].items():
         assert hashlib.sha256((out / name).read_bytes()).hexdigest() == digest
+    # The digests are over the artifact bytes, which is what makes the deliberate
+    # re-hash on every flush load-bearing rather than redundant bookkeeping: a
+    # changed artifact stops matching (see the ponytail: note at that block).
+    (out / "capture.jsonl").write_bytes(b'{"method":"POST","url":"https://x.test/other"}\n')
+    assert (
+        hashlib.sha256((out / "capture.jsonl").read_bytes()).hexdigest()
+        != manifest["sha256"]["capture.jsonl"]
+    )
 
 
 def test_vendor_names_not_hardcoded_in_source(capture):
