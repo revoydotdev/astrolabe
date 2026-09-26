@@ -84,6 +84,30 @@ stealth engine required. The capture tier can also run against a remote
 one) through the same browser layer; the analysis/contract/mcp-gen/replay
 tiers are pure Python and run anywhere.
 
+### Verify a change
+
+One command runs the same gates CI runs — ruff, `ruff format --check`, mypy over
+both `tests/` and `astrolabe/`, and pytest under the coverage floor:
+
+```
+uv run --extra dev --extra browser-auth astrolabe check
+```
+
+Both extras are load-bearing, and the reason is the same each time: they are
+optional, so a plain `uv run` re-syncs to the default selection and *removes*
+packages rather than adding them.
+
+- `--extra dev` carries pytest, ruff and mypy. Without it the gate cannot run.
+- `--extra browser-auth` carries `publicsuffixlist`, `secretstorage` and
+  `cryptography`, which the native browser-import tests exercise for real. Those
+  tests are not skipped when the extra is absent, so a run without it fails rather
+  than reporting honestly.
+- Add `--extra stealth` too if you want the browser e2e to run locally:
+  `uv sync --extra dev --extra browser-auth` alone prunes cloakbrowser, which turns
+  those tests into skips rather than failures.
+
+See `AGENTS.md` for the full set of working rules.
+
 ### Browser backend
 
 astrolabe drives the browser through a small pluggable layer

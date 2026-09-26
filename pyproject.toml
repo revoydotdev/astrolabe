@@ -105,3 +105,12 @@ ignore = ["B008"]
 # capture host; it is deliberately not installed in this dev/CI environment.
 module = "cloakbrowser"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# publicsuffixlist ships in the optional `browser-auth` extra, and
+# browser_cookies.py imports it inside a try/except ImportError that already
+# turns its absence into a named install hint. The gate must type-check without
+# the extra: a developer venv that carries it stays green either way, which is
+# how a clean checkout and CI both failed on this import.
+module = "publicsuffixlist"
+ignore_missing_imports = true

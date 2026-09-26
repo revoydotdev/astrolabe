@@ -30,7 +30,7 @@ jobs:
         run: uv lock --check
 
       - name: Install dependencies
-        run: uv sync --extra dev --python ${{ matrix.python-version }}
+        run: uv sync --extra dev --extra browser-auth --python ${{ matrix.python-version }}
 
       # tests/test_e2e_spa.py is the only coverage of a real browser launch, a real
       # interaction-gated capture, and a real CDP attach against a running browser.
