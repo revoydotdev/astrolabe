@@ -91,22 +91,42 @@ REFUSALS = [
     ),
 ]
 
-_REPO_TOOLPACK = (
-    Path(__file__).resolve().parents[1] / "chart-docs.qualcomm.com-af7e7498ef63/toolpack.json"
+# The committed synthetic pack (tests/fixtures/synthetic-toolpack.json), not a generated
+# chart-* pack. Still a real v2 pack, so the freeze drives the production
+# _validate_pack -> mount -> namespaced-name path; only the pack's identity changed.
+_FIXTURE_TOOLPACK = (
+    Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "synthetic-toolpack.json"
 )
 
-TYPED_TOOL_NAMES = [
-    "typed_docs_qualcomm_com_coverage_report",
-    "typed_docs_qualcomm_com_describe_operation",
-    "typed_docs_qualcomm_com_diff_contract",
-    "typed_docs_qualcomm_com_getBundlePublicresourceGetCollectionSecuritybulletin",
-    "typed_docs_qualcomm_com_getSearchProductNavigationPDC20903",
-    "typed_docs_qualcomm_com_invoke_query",
-    "typed_docs_qualcomm_com_search_operations",
-    "typed_docs_qualcomm_com_subscribe_events",
-    "typed_docs_qualcomm_com_trace_surface",
-    "typed_docs_qualcomm_com_verify_operation",
+# The eight per-namespace discovery tools every mounted pack re-advertises, carrying the
+# sanitized namespace the unified server derives from the pack's base_domain. They come
+# from the typed server, not the pack's own tool list, so they hold for any pack -- which
+# is what makes them the regression signal, independent of what the fixture declares.
+#
+# Literals, not `_DISCOVERY_SUFFIXES` and not `_sanitize_namespace(...)`: deriving either
+# would move both sides of the comparison, and a rename in astrolabe/ would stay green.
+TYPED_DISCOVERY_TOOL_NAMES = [
+    "typed_widgets_example_test_coverage_report",
+    "typed_widgets_example_test_describe_operation",
+    "typed_widgets_example_test_diff_contract",
+    "typed_widgets_example_test_invoke_query",
+    "typed_widgets_example_test_search_operations",
+    "typed_widgets_example_test_subscribe_events",
+    "typed_widgets_example_test_trace_surface",
+    "typed_widgets_example_test_verify_operation",
 ]
+
+# The pack-derived half of the derived surface: the operations the mounted fixture
+# declares and exposes. This part is fixture-dependent by nature and is only as stable as
+# the fixture is; it is pinned so an operation added to, or renamed in, the fixture has to
+# be a deliberate edit here too.
+TYPED_PACK_OPERATION_NAMES = [
+    "typed_widgets_example_test_listWidgets",
+]
+
+# The complete derived typed surface, exactly as list_tools reports it and sorted the same
+# way, so a name appearing, disappearing or moving still fails the equality.
+TYPED_TOOL_NAMES = sorted([*TYPED_DISCOVERY_TOOL_NAMES, *TYPED_PACK_OPERATION_NAMES])
 
 
 @pytest.fixture(autouse=True)
@@ -116,11 +136,14 @@ def _no_toolpack_env(monkeypatch):
 
 
 @pytest.fixture
-def qualcomm_pack(tmp_path) -> Path:
-    if not _REPO_TOOLPACK.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK}")
-    target = tmp_path / "qualcomm.json"
-    target.write_bytes(_REPO_TOOLPACK.read_bytes())
+def synthetic_pack(tmp_path) -> Path:
+    """Copy of the committed synthetic toolpack into tmp_path.
+
+    A missing committed fixture is a broken checkout, so the read is allowed to raise
+    rather than skip: a skip here hides every typed-name assertion in this file.
+    """
+    target = tmp_path / "synthetic.json"
+    target.write_bytes(_FIXTURE_TOOLPACK.read_bytes())
     return target
 
 
@@ -134,11 +157,27 @@ async def test_unified_server_without_toolpacks_is_the_mapping_surface(tmp_path)
         assert sorted(t.name for t in await client.list_tools()) == UNIFIED_TOOL_NAMES
 
 
-async def test_typed_pack_tool_names_are_frozen(qualcomm_pack, monkeypatch):
+async def test_typed_pack_discovery_tools_are_frozen(synthetic_pack, monkeypatch):
+    """The eight per-pack fixed names, asserted on their own and by literal.
+
+    These are the part of the legacy surface that holds for any pack, so they are pinned
+    separately from the derived-surface equality below: a fixture edit that renames or adds
+    an operation cannot move them, and a rename of e.g. describe_operation in astrolabe/
+    fails here even if every list in this file is updated to match.
+    """
+    monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
+    async with Client(create_unified_server()) as client:
+        names = set(t.name for t in await client.list_tools())
+    missing = [n for n in TYPED_DISCOVERY_TOOL_NAMES if n not in names]
+    assert not missing, f"legacy opt-in dropped the fixed discovery tools: {missing}"
+
+
+async def test_typed_pack_tool_names_are_frozen(synthetic_pack, monkeypatch):
     """Removed from the default surface by todo 5; pinned on the legacy opt-in, which
     exists precisely so an agent that learned these names can keep using them."""
     monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     async with Client(create_unified_server()) as client:
         names = sorted(t.name for t in await client.list_tools())
     assert [n for n in names if n.startswith("typed_")] == TYPED_TOOL_NAMES
