@@ -26,15 +26,16 @@ from astrolabe.unified_mcp import (
 
 # ----- Fixture source data ---------------------------------------------------
 
-# Real toolpacks shipped in the repo copy from a chart directory so the
-# tests exercise the production _validate_pack path. We never mutate the
-# originals on disk.
+# A hand-authored synthetic toolpack, not a capture: the domain, operation
+# names and schema are invented, so the fixture carries no target material and
+# cannot drift when someone re-captures a chart. It is a real v2 toolpack, so
+# the tests still drive the production _validate_pack -> mount path. We never
+# mutate the original on disk.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_REPO_CHART_QUALCOMM = _REPO_ROOT / "chart-docs.qualcomm.com-af7e7498ef63"
-_REPO_TOOLPACK_QUALCOMM = _REPO_CHART_QUALCOMM / "toolpack.json"
+_FIXTURE_TOOLPACK = _REPO_ROOT / "tests" / "fixtures" / "synthetic-toolpack.json"
 
-_QUALCOMM_DOMAIN_RAW = "docs.qualcomm.com"
-_QUALCOMM_DOMAIN_SANITIZED = "docs_qualcomm_com"
+_PACK_DOMAIN_RAW = "widgets.example.test"
+_PACK_DOMAIN_SANITIZED = "widgets_example_test"
 
 # The eight per-namespace discovery tools every mounted pack currently re-advertises.
 DISCOVERY_SUFFIXES = {
@@ -110,22 +111,22 @@ def tmp_workspace(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def qualcomm_pack(tmp_path) -> Path:
-    """Deep-copy of the bundled qualcomm toolpack into tmp_path."""
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
-    target = tmp_path / "qualcomm.json"
-    shutil.copyfile(_REPO_TOOLPACK_QUALCOMM, target)
+def synthetic_pack(tmp_path) -> Path:
+    """Deep-copy of the committed synthetic toolpack into tmp_path.
+
+    A missing fixture is a broken checkout, so the copy is allowed to raise
+    rather than skip: a skip here would hide the whole file.
+    """
+    target = tmp_path / "synthetic.json"
+    shutil.copyfile(_FIXTURE_TOOLPACK, target)
     return target
 
 
 @pytest.fixture
 def two_distinct_packs(tmp_path) -> tuple[Path, Path]:
-    """Two *distinct* toolpacks derived from the qualcomm pack by mutating
+    """Two *distinct* toolpacks derived from the synthetic pack by mutating
     only base_domain so both pass _validate_pack independently."""
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
-    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    base = json.loads(_FIXTURE_TOOLPACK.read_text())
     a = dict(base)
     a["base_domain"] = "a.example.test"
     b = dict(base)
@@ -149,7 +150,7 @@ def bad_toolpack(tmp_path) -> Path:
 
 
 def test_sanitize_replaces_dots_with_underscores():
-    assert _sanitize_namespace("docs.qualcomm.com") == "docs_qualcomm_com"
+    assert _sanitize_namespace(_PACK_DOMAIN_RAW) == _PACK_DOMAIN_SANITIZED
 
 
 def test_sanitize_idempotent_on_already_clean_string():
@@ -271,11 +272,11 @@ async def test_mapping_only_server_name(tmp_workspace):
 # ----- create_unified_server: single toolpack mounted -----------------------
 
 
-async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, qualcomm_pack, monkeypatch):
+async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, synthetic_pack, monkeypatch):
     """The pre-collapse per-Chart names are now opt-in, so this asserts the landing
     path: an operator who has not migrated can still get them back verbatim."""
     monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     names = await _tool_names(server)
 
@@ -283,7 +284,7 @@ async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, qualcomm_
     assert set(names) >= MAPPING_TOOL_NAMES
 
     # Exactly one typed-pack namespace mounted, with the sanitized domain
-    expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    expected_ns = f"typed_{_PACK_DOMAIN_SANITIZED}"
     assert server.unified_namespaces == {expected_ns}
 
     # Every typed tool appears once with the namespaced name
@@ -291,37 +292,29 @@ async def test_single_toolpack_mounts_with_typed_prefix(tmp_workspace, qualcomm_
     assert typed_names, f"no namespaced tools: {names}"
     assert len(typed_names) == len(set(typed_names)), "duplicate tool names"
 
-    # The qualcomm pack carries these tools (verified earlier):
-    expected_inner = {
-        "coverage_report",
-        "describe_operation",
-        "diff_contract",
-        "invoke_query",
-        "search_operations",
-        "subscribe_events",
-        "trace_surface",
-        "verify_operation",
-    }
-    for inner in expected_inner:
+    # The per-namespace discovery tools every mounted pack re-advertises, plus
+    # the pack's own invocable operation. The eight come from the typed server,
+    # not from the pack's tool list, so they hold for any pack.
+    for inner in (*DISCOVERY_SUFFIXES, "listWidgets"):
         assert f"{expected_ns}_{inner}" in names, f"missing {expected_ns}_{inner}"
 
 
-async def test_single_toolpack_namespace_has_no_dots(tmp_workspace, qualcomm_pack):
+async def test_single_toolpack_namespace_has_no_dots(tmp_workspace, synthetic_pack):
     """FastMCP rejects namespaces that contain dots; the implementation must
-    sanitize so consumers never see ``typed_docs.qualcomm.com_tool``."""
-    os.environ["ASTROLABE_TOOLPACK"] = str(qualcomm_pack)
+    sanitize so consumers never see ``typed_widgets.example.test_tool``."""
+    os.environ["ASTROLABE_TOOLPACK"] = str(synthetic_pack)
     server = create_unified_server()
     names = await _tool_names(server)
     typed = [n for n in names if n.startswith("typed_")]
     assert all("." not in n for n in typed)
 
 
-async def test_single_toolpack_resources_namespaced(tmp_workspace, qualcomm_pack, monkeypatch):
+async def test_single_toolpack_resources_namespaced(tmp_workspace, synthetic_pack, monkeypatch):
     monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     uris = await _resource_uris(server)
-    expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    expected_ns = f"typed_{_PACK_DOMAIN_SANITIZED}"
     # FastMCP namespaced the URIs to ``astrolabe://<ns>/<original>``
     assert any(expected_ns in u and u.endswith("/manifest") for u in uris)
     assert any(expected_ns in u and u.endswith("/health") for u in uris)
@@ -396,10 +389,8 @@ async def test_two_packs_same_domain_second_is_rejected(tmp_workspace, monkeypat
     """If two toolpacks target the same base_domain, mounting them under
     identical namespaces would produce a FastMCP composition error. The
     unified server must handle this gracefully — by deduping the second."""
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip("bundled toolpack missing")
     monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
-    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    base = json.loads(_FIXTURE_TOOLPACK.read_text())
     p1 = tmp_workspace / "p1.json"
     p1.write_text(json.dumps(base))
     p2 = tmp_workspace / "p2.json"
@@ -408,15 +399,15 @@ async def test_two_packs_same_domain_second_is_rejected(tmp_workspace, monkeypat
     server = create_unified_server()
     names = await _tool_names(server)
 
-    # Exactly one qualcomm namespace mounted (the second pack was skipped)
-    assert server.unified_namespaces == {f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"}
+    # Exactly one namespace mounted (the second pack was skipped)
+    assert server.unified_namespaces == {f"typed_{_PACK_DOMAIN_SANITIZED}"}
     # No duplicate tool names anywhere
     typed = [n for n in names if n.startswith("typed_")]
     counts = {n: names.count(n) for n in typed}
     assert all(c == 1 for c in counts.values()), f"duplicate tool names: {counts}"
-    # And the qualcomm pack's tool appears (one canonical copy)
-    qualcomm_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
-    assert f"{qualcomm_ns}_invoke_query" in names
+    # And the pack's own invocable operation appears (one canonical copy)
+    pack_ns = f"typed_{_PACK_DOMAIN_SANITIZED}"
+    assert f"{pack_ns}_listWidgets" in names
     # The skip was recorded with the collision reason
     skip_paths = {p for p, _ in server.unified_skipped}
     assert str(p2) in skip_paths
@@ -430,13 +421,13 @@ async def test_two_packs_same_domain_second_is_rejected(tmp_workspace, monkeypat
 _CONTRACT_MARKER = "do not retry it yourself"
 
 
-async def test_instructions_carry_the_typed_contract(tmp_workspace, qualcomm_pack, monkeypatch):
+async def test_instructions_carry_the_typed_contract(tmp_workspace, synthetic_pack, monkeypatch):
     """The flip of a baseline that proved mounting contributed no instructions.
 
     An agent that cannot see ``UPSTREAM_AUTH_EXPIRED`` will hand-retry an expired
     credential and re-run mutations the server already declined to auto-retry.
     """
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     assert server.unified_namespaces
     instructions = server.instructions or ""
@@ -454,9 +445,7 @@ async def test_instructions_without_packs_are_the_mapping_string(tmp_workspace):
 async def test_skipped_pack_contributes_no_instructions(tmp_workspace, monkeypatch):
     """A pack skipped for a namespace collision has no tools, so it must not
     contribute a contract describing tools the agent cannot reach."""
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
-    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    base = json.loads(_FIXTURE_TOOLPACK.read_text())
     first = dict(base)
     second = dict(base)  # identical base_domain -> collides with the first
     p1 = tmp_workspace / "first.json"
@@ -471,7 +460,7 @@ async def test_skipped_pack_contributes_no_instructions(tmp_workspace, monkeypat
 
 
 def _synthetic_packs(workspace: Path, count: int) -> list[str]:
-    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    base = json.loads(_FIXTURE_TOOLPACK.read_text())
     paths = []
     for index in range(count):
         pack = dict(base)
@@ -483,8 +472,6 @@ def _synthetic_packs(workspace: Path, count: int) -> list[str]:
 
 
 async def test_instructions_length_is_bounded_with_twelve_packs(tmp_workspace, monkeypatch):
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
     monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(_synthetic_packs(tmp_workspace, 12)))
     server = create_unified_server()
     assert len(server.unified_namespaces) == 12
@@ -497,8 +484,6 @@ async def test_instructions_length_is_bounded_with_twelve_packs(tmp_workspace, m
 async def test_instructions_are_identical_regardless_of_enumeration_order(
     tmp_workspace, monkeypatch
 ):
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
     paths = _synthetic_packs(tmp_workspace, 12)
     monkeypatch.setenv("ASTROLABE_TOOLPACKS", ",".join(paths))
     forward = create_unified_server().instructions
@@ -511,10 +496,8 @@ async def test_instructions_are_identical_regardless_of_enumeration_order(
 
 
 async def test_chart_status_reports_a_collision_with_its_reason(tmp_workspace, monkeypatch):
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
     paths = _synthetic_packs(tmp_workspace, 2)
-    base = json.loads(_REPO_TOOLPACK_QUALCOMM.read_text())
+    base = json.loads(_FIXTURE_TOOLPACK.read_text())
     for path in paths:  # same base_domain -> the second pack collides
         pack = dict(base)
         pack["base_domain"] = "collide.example.test"
@@ -531,8 +514,6 @@ async def test_chart_status_reports_a_collision_with_its_reason(tmp_workspace, m
 async def test_chart_status_flags_a_pack_that_lands_out_of_band(tmp_workspace, monkeypatch):
     """The disk-vs-mounted diff is the whole point, so it must notice a chart
     that appears after the server was built."""
-    if not _REPO_TOOLPACK_QUALCOMM.exists():
-        pytest.skip(f"bundled toolpack missing: {_REPO_TOOLPACK_QUALCOMM}")
     monkeypatch.setenv("ASTROLABE_TOOLPACKS", str(tmp_workspace))
     server = create_unified_server()
     async with Client(server) as client:
@@ -540,7 +521,7 @@ async def test_chart_status_flags_a_pack_that_lands_out_of_band(tmp_workspace, m
         assert before["charts_on_disk_not_mounted"] == []
         late = tmp_workspace / "late-arrival"
         late.mkdir()
-        (late / "toolpack.json").write_text(_REPO_TOOLPACK_QUALCOMM.read_text())
+        (late / "toolpack.json").write_text(_FIXTURE_TOOLPACK.read_text())
         after = (await client.call_tool("chart_status", {})).data
     assert after["charts_on_disk_not_mounted"] == ["late-arrival/toolpack.json"]
 
@@ -566,7 +547,7 @@ async def test_chart_status_never_returns_an_absolute_chart_path(tmp_workspace, 
 
 
 async def test_collapsed_surface_drops_the_per_chart_tools(
-    tmp_workspace, qualcomm_pack, monkeypatch
+    tmp_workspace, synthetic_pack, monkeypatch
 ):
     """FLIPPED from a baseline that pinned 8 discovery tools per Chart.
 
@@ -574,7 +555,7 @@ async def test_collapsed_surface_drops_the_per_chart_tools(
     re-advertising them. The collapsed surface carries neither them nor the
     per-Chart operation tools.
     """
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
@@ -583,21 +564,21 @@ async def test_collapsed_surface_drops_the_per_chart_tools(
 
 
 async def test_collapsed_surface_legacy_opt_in_restores_the_old_names(
-    tmp_workspace, qualcomm_pack, monkeypatch
+    tmp_workspace, synthetic_pack, monkeypatch
 ):
     """The landing path for an agent that learned astrolabe_typed_<ns>_<op>."""
     monkeypatch.setenv("ASTROLABE_LEGACY_DIRECT_TOOLS", "1")
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
-    expected_ns = f"typed_{_QUALCOMM_DOMAIN_SANITIZED}"
+    expected_ns = f"typed_{_PACK_DOMAIN_SANITIZED}"
     for inner in DISCOVERY_SUFFIXES:
         assert f"{expected_ns}_{inner}" in names, f"legacy opt-in did not restore {inner}"
 
 
 async def test_every_invocable_operation_stays_reachable_after_the_collapse(
-    tmp_workspace, qualcomm_pack, monkeypatch
+    tmp_workspace, synthetic_pack, monkeypatch
 ):
     """The invariant the collapse had to preserve, re-expressed through call_tool.
 
@@ -605,7 +586,7 @@ async def test_every_invocable_operation_stays_reachable_after_the_collapse(
     it must now hold as "each invocable operation is returned by search_tools and
     accepted by call_tool", with no reachable operation lost.
     """
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     async with Client(server) as client:
         found = await client.call_tool("search_tools", {"limit": 200})
@@ -613,7 +594,7 @@ async def test_every_invocable_operation_stays_reachable_after_the_collapse(
     operations = payload["operations"]
     assert operations, "the collapse left nothing callable"
     for entry in operations:
-        assert entry["operation_id"].startswith(f"{_QUALCOMM_DOMAIN_SANITIZED}__")
+        assert entry["operation_id"].startswith(f"{_PACK_DOMAIN_SANITIZED}__")
         assert entry["input_schema"], "a hit carried no input schema"
 
     # The operation ids are accepted, and an unknown one is refused with a reason.
@@ -625,14 +606,14 @@ async def test_every_invocable_operation_stays_reachable_after_the_collapse(
 
 
 async def test_collapsed_surface_excludes_charts_with_nothing_invocable(
-    tmp_workspace, qualcomm_pack, monkeypatch
+    tmp_workspace, synthetic_pack, monkeypatch
 ):
     """A Chart with no invocable operation must contribute no callable operation.
 
     Measured live before the change: pastebin and privatebin contributed 16 tools
     between them with invocable_count 0, all of them unreachable.
     """
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     server = create_unified_server()
     async with Client(server) as client:
         found = await client.call_tool("search_tools", {"limit": 200})
@@ -675,8 +656,8 @@ async def test_no_tool_leaks_a_raw_validation_error_on_the_unified_surface(tmp_w
     assert not leaks, f"tools leaking a raw validation error: {leaks}"
 
 
-async def test_missing_arguments_name_the_way_out(tmp_workspace, qualcomm_pack, monkeypatch):
-    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(qualcomm_pack))
+async def test_missing_arguments_name_the_way_out(tmp_workspace, synthetic_pack, monkeypatch):
+    monkeypatch.setenv("ASTROLABE_TOOLPACK", str(synthetic_pack))
     refusals = dict(await _every_tool_refusals_are_authored(create_unified_server()))
     assert "capture_directory is required" in refusals["generate_chart"]
     assert "list_charts" in refusals["generate_chart"]
