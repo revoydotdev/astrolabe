@@ -66,6 +66,25 @@ content can steer a browser that already holds real credentials, and the operato
 own cookies travel with any subresource the page pulls. Use `cookies_file` when the
 capture does not need the live session.
 
+## Dispatch isolation
+
+`map_site`, `verify_chart` and `import_har` shell out to `python -m
+astrolabe.cli` for the capture itself, because a browser must not share the
+server's process. `preflight` and `mcp-gen` are short, browserless and read
+from disk, so they run on the server's own interpreter instead of paying for a
+fresh interpreter per call. That trade is deliberate and it has two costs: an
+in-process run holds the event loop for its duration, and it cannot be timed
+out, so a hung command is no longer interrupted at the tool boundary.
+
+Set `ASTROLABE_MCP_SPAWN=1` to put every command back on the subprocess path,
+one interpreter per call, which restores both the per-call timeout and the
+isolation. It is operator config in the same sense as the allowlists above: no
+tool argument can set it, and the server reads it once at startup. Either way
+`sys.argv`, the working directory and stdout/stderr are restored around an
+in-process call, and each call's stderr is written to the same mode-0600 log
+file the response's `log` key points at, so the two dispatch paths return the
+same envelope.
+
 ## Agent-held sessions
 
 `register_session` lets an agent store a session it already holds and spend it
