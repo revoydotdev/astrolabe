@@ -8,7 +8,13 @@ for `astrolabe contract --active`. Runs in the cloakbrowser venv on the capture 
 """
 
 from __future__ import annotations
-import argparse, datetime, json, importlib.util, os, re, urllib.parse as up
+import argparse
+import datetime
+import json
+import importlib.util
+import os
+import re
+import urllib.parse as up
 
 try:
     from astrolabe.browser import launch_context

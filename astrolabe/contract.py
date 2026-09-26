@@ -18,10 +18,15 @@ Merges a prior contract (`--merge`) for completeness + drift.
 """
 
 from __future__ import annotations
-import argparse, json, os, re, urllib.parse as up, datetime
+import argparse
+import json
+import os
+import re
+import urllib.parse as up
+import datetime
 from .artifact import atomic_write_json, atomic_write_text
 from .ir import evidence_records_from_graph, inventory_from_graph, load_graph
-from .mcpgen import apply_protocol_overrides, classify_rest, shape_to_schema, tool_name
+from .mcpgen import apply_protocol_overrides, classify_rest, shape_to_schema
 from .shapemerge import coerce_to_schema, merge_json_schemas, merge_shapes, schema_properties
 
 OP = re.compile(r"\b(query|mutation|subscription)\s+([A-Za-z0-9_]+)")
@@ -536,7 +541,7 @@ def render_md(contract, drift=None):
         f"# {contract['base_domain']} — executable typed contract\n",
         f"_Durable contract of record. Endpoints: {', '.join('`' + e + '`' for e in contract['endpoints'])}._\n",
         "## Coverage scorecard\n",
-        f"| metric | count | % |",
+        "| metric | count | % |",
         "|---|---|---|",
         f"| operations | {cov['total']} | 100% |",
         f"| typed input schema | {cov['typed_input']} | {cov['typed_input'] * 100 // n}% |",

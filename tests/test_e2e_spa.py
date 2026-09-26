@@ -30,17 +30,34 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _chromium_binary() -> str | None:
+    """A Chromium executable for the two tests that launch one as a subprocess.
+
+    Prefers cloakbrowser's bundled build, matching the default backend. Falls
+    back to Playwright's, which every environment has after the documented
+    `playwright install chromium` -- CI installs only that, because the stealth
+    extra is not a dev dependency. Asking cloakbrowser alone made this the only
+    skip in a CI run that already had a perfectly good Chromium on disk.
+    """
     try:
         import cloakbrowser
 
         info = cloakbrowser.binary_info()
+        if info.get("installed") and Path(info["binary_path"]).exists():
+            return info["binary_path"]
+    except Exception:
+        pass
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            path = pw.chromium.executable_path
     except Exception:
         return None
-    return info["binary_path"] if info.get("installed") else None
+    return path if path and Path(path).exists() else None
 
 
 BINARY = _chromium_binary()
-pytestmark = pytest.mark.skipif(BINARY is None, reason="no local Chromium for e2e capture")
+pytestmark = pytest.mark.skipif(BINARY is None, reason="no Chromium available for e2e capture")
 
 
 class Handler(BaseHTTPRequestHandler):

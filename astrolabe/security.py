@@ -18,9 +18,9 @@ import urllib.parse as up
 import zlib
 
 try:
-    from .payloads import DecodedPayload, decode_payload, PackagingError
+    from .payloads import DecodedPayload, decode_payload
 except ImportError:  # flat capture-host deployment
-    from payloads import DecodedPayload, decode_payload, PackagingError  # type: ignore[import-not-found,no-redef]
+    from payloads import DecodedPayload, decode_payload  # type: ignore[import-not-found,no-redef]
 from collections.abc import Mapping
 from typing import Any
 

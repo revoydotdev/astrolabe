@@ -906,7 +906,7 @@ def create_server(
 
         actions: list[dict[str, Any]] = []
         skipped_unusable = 0
-        for url, record in sorted((evidence.get("evidence") or {}).items()):
+        for _url, record in sorted((evidence.get("evidence") or {}).items()):
             if len(actions) >= limit:
                 break
             for target in record.get("click_targets") or []:

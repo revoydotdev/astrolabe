@@ -76,8 +76,10 @@ testpaths = ["tests"]
 # Treat async test functions as pytest-asyncio tests automatically. Existing
 # tests that explicitly carry ``@pytest.mark.asyncio`` are still valid.
 asyncio_mode = "auto"
-# Measure the whole production package, not a cherry-picked subset.
-addopts = "--cov=astrolabe --cov-fail-under=65 -q"
+# Measure the whole production package, not a cherry-picked subset. The floor was
+# 65; the suite measures 73.46%, so it is raised to 70 to keep a regression from
+# hiding behind a floor that was never binding. Never lower it.
+addopts = "--cov=astrolabe --cov-fail-under=70 -q"
 
 [tool.ruff]
 line-length = 100
@@ -92,10 +94,11 @@ ignore = ["B008"]
 # Inherited baseline from the private source tree this was extracted from;
 # every other selected rule (including all of ARG) stays enforced. Shrink
 # this list as debt is paid down; never add newly-introduced codes to it.
-"astrolabe/*" = [
-    "E501", "SIM115", "SIM105", "I001", "F541", "E401", "N806", "E702",
-    "F401", "E741", "E701", "UP031", "F841", "B007",
-]
+# Still open, with the work each one implies: E501 42 long lines (needs a
+# production `ruff format` pass), I001 25 unsorted import blocks (same pass,
+# mostly), N806 10 non-lowercase locals, SIM105 13 try/except/pass,
+# SIM115 28 open-in-try.
+"astrolabe/*" = ["E501", "SIM115", "SIM105", "I001", "N806"]
 
 [[tool.mypy.overrides]]
 # cloakbrowser is a private capture-host driver that lives only on the remote

@@ -15,7 +15,17 @@ Per-site recipe (--recipe file.py) may define:
 """
 
 from __future__ import annotations
-import argparse, atexit, hashlib, json, os, re, signal, sys, time, importlib.util, urllib.request, urllib.parse as up
+import argparse
+import atexit
+import hashlib
+import json
+import os
+import re
+import signal
+import time
+import importlib.util
+import urllib.request
+import urllib.parse as up
 from datetime import UTC, datetime
 from functools import lru_cache
 

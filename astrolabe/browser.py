@@ -70,9 +70,16 @@ def launch_context(**kw):
 def _launch_playwright_context(**kw):
     from playwright.sync_api import sync_playwright
 
+    # `args` configures the browser process, not the context, so it belongs on
+    # launch(). Dropping it here made a caller's Chromium flags (host-resolver
+    # rules, proxy-bypass, sandbox opt-outs) vanish without a word.
+    process_args = kw.pop("args", None)
     pw = sync_playwright().start()
     try:
-        browser = pw.chromium.launch(headless=kw.get("headless", True))
+        launch_kw = {"headless": kw.get("headless", True)}
+        if process_args is not None:
+            launch_kw["args"] = list(process_args)
+        browser = pw.chromium.launch(**launch_kw)
     except Exception:
         pw.stop()
         raise

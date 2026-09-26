@@ -18,7 +18,8 @@ Scope & limits (measured, honest):
 """
 
 from __future__ import annotations
-import json, urllib.parse as up
+import json
+import urllib.parse as up
 
 try:
     from astrolabe.browser import launch_context
