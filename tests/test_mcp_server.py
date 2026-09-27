@@ -614,7 +614,9 @@ def test_transport_failure_has_stable_retryable_error(configured, monkeypatch) -
 
 
 def test_retry_after_supports_http_date() -> None:
-    assert server_module._retry_delay(0, "Wed, 21 Oct 2099 07:28:00 GMT") == 5.0
+    from astrolabe.transport import retry_delay
+
+    assert retry_delay(0, "Wed, 21 Oct 2099 07:28:00 GMT") == 5.0
 
 
 def test_rate_headers_reserve_capacity_before_exhaustion(configured) -> None:

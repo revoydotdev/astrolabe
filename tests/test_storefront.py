@@ -136,3 +136,87 @@ async def test_collector_pages_and_atomic_writer(tmp_path):
     lines = target.read_text().splitlines()
     assert len(lines) == 2
     assert '"schema_version":1' in lines[0]
+
+
+class StatusResponse:
+    def __init__(self, status_code, body=None, headers=None):
+        self.status_code = status_code
+        self.body = body
+        self.headers = headers
+
+    def json(self):
+        return self.body
+
+
+class StatusSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    async def post(self, endpoint, **kwargs):
+        self.calls += 1
+        return self.responses.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_collector_retries_a_rate_limited_origin(monkeypatch):
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("astrolabe.storefront.asyncio.sleep", fake_sleep)
+    session = StatusSession(
+        [
+            StatusResponse(429, headers={"retry-after": "2"}),
+            StatusResponse(200, payload()),
+        ]
+    )
+    result = await Collector(session=session, retries=2).collect("cards.example")
+    assert session.calls == 2
+    assert slept == [2.0]
+    assert len(result.observations) == 1
+
+
+@pytest.mark.asyncio
+async def test_collector_does_not_retry_a_permanent_verdict(monkeypatch):
+    async def fake_sleep(seconds):
+        raise AssertionError("a 403 must not be waited on and repeated")
+
+    monkeypatch.setattr("astrolabe.storefront.asyncio.sleep", fake_sleep)
+    session = StatusSession([StatusResponse(403), StatusResponse(200, payload())])
+    with pytest.raises(StorefrontContractError, match="HTTP 403"):
+        await Collector(session=session, retries=3).collect("cards.example")
+    assert session.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_collector_retries_a_transport_fault_then_succeeds(monkeypatch):
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr("astrolabe.storefront.asyncio.sleep", fake_sleep)
+
+    class FlakySession(StatusSession):
+        async def post(self, endpoint, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("read timed out")
+            return StatusResponse(200, payload())
+
+    session = FlakySession([])
+    result = await Collector(session=session, retries=1).collect("cards.example")
+    assert session.calls == 2
+    assert len(result.observations) == 1
+
+
+@pytest.mark.asyncio
+async def test_collector_gives_up_after_the_configured_retries(monkeypatch):
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr("astrolabe.storefront.asyncio.sleep", fake_sleep)
+    session = StatusSession([StatusResponse(503), StatusResponse(503)])
+    with pytest.raises(StorefrontContractError, match="HTTP 503"):
+        await Collector(session=session, retries=1).collect("cards.example")
+    assert session.calls == 2

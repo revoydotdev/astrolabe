@@ -17,7 +17,6 @@ import json
 import math
 import os
 import ssl
-import random
 import re
 import shlex
 import signal
@@ -30,7 +29,6 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
@@ -68,6 +66,7 @@ from .security import (
     safe_text,
     validate_url,
 )
+from .transport import RETRYABLE_STATUS, retry_after_header, retry_delay
 from .validation import validate_json_schema, validate_value_budget
 
 _DENIED_HEADERS = DENIED_HEADERS
@@ -75,7 +74,7 @@ _DENIED_HEADERS = DENIED_HEADERS
 # rather than accepted at whatever length a target can induce. Relocated target text
 # lives behind astrolabe://tools/{name}, not in here.
 MAX_TOOL_DESCRIPTION_CHARS = 1000
-_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_RETRYABLE_STATUS = set(RETRYABLE_STATUS)
 _JSON_OBJECT_SCHEMA = {"type": "object", "additionalProperties": True}
 _SEARCH_PAGE = 200
 
@@ -2261,7 +2260,7 @@ class Runtime:
                 status = response.status_code
                 if status in _RETRYABLE_STATUS and attempt + 1 < attempts:
                     last_error = f"upstream returned HTTP {status}"
-                    time.sleep(_retry_delay(attempt, response.headers.get("retry-after")))
+                    time.sleep(retry_delay(attempt, retry_after_header(response)))
                     continue
                 try:
                     decoded = (
@@ -2362,7 +2361,7 @@ class Runtime:
             except Exception as exc:  # curl_cffi exposes several transport exception types
                 last_error = safe_text(exc) or type(exc).__name__
                 if attempt + 1 < attempts:
-                    time.sleep(_retry_delay(attempt, None))
+                    time.sleep(retry_delay(attempt, None))
         return _failure("UPSTREAM_UNAVAILABLE", last_error, retryable=True)
 
 
@@ -2373,21 +2372,6 @@ def _mode_is_private(path: Path | None) -> bool | None:
         return not bool(stat.S_IMODE(path.stat().st_mode) & 0o077)
     except OSError:
         return False
-
-
-def _retry_delay(attempt: int, retry_after: str | None) -> float:
-    if retry_after:
-        try:
-            return min(max(float(retry_after), 0.0), 5.0)
-        except ValueError:
-            try:
-                when = parsedate_to_datetime(retry_after)
-                if when.tzinfo is None:
-                    when = when.replace(tzinfo=UTC)
-                return min(max((when - datetime.now(UTC)).total_seconds(), 0.0), 5.0)
-            except (TypeError, ValueError, OverflowError):
-                pass
-    return min(0.2 * (2**attempt) + random.uniform(0, 0.1), 2.0)
 
 
 class ToolpackTool(Tool):
