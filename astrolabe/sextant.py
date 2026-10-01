@@ -2999,6 +2999,25 @@ def _collect_toolpack_paths() -> list[Path]:
     return sorted(out)
 
 
+def _newest_first(paths: list[Path]) -> list[Path]:
+    """Order packs so that, of several sharing a Chart key, the most recently written wins.
+
+    Every re-map of a site writes a new ``chart-<host>-<hash>/`` beside the old ones, all
+    naming the same server. Resolving the collision by path order let a hash prefix pick
+    the winner, so a stale early capture shadowed every later one and the operations only
+    the later captures recorded were unreachable. Write time is the pack's own evidence of
+    recency and needs nothing from the capture layer; ties fall back to path order.
+    """
+
+    def written(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(paths, key=lambda path: (-written(path), str(path)))
+
+
 def _code_root() -> Path:
     """The source tree the running interpreter imported ``astrolabe`` from.
 
@@ -3157,8 +3176,8 @@ def create_server(*, auth: AuthProvider | None = None) -> FastMCP:
     packs: list[tuple[str, FastMCP, str]] = []
     contracts: list[str] = []
     skipped: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for pack_path in _collect_toolpack_paths():
+    seen: dict[str, Path] = {}
+    for pack_path in _newest_first(_collect_toolpack_paths()):
         try:
             typed = _chart_server_for(pack_path)
         except Exception as exc:  # noqa: BLE001 — operator-facing skip log
@@ -3174,14 +3193,20 @@ def create_server(*, auth: AuthProvider | None = None) -> FastMCP:
             skipped.append(
                 {
                     "pack_path": str(pack_path),
-                    "reason": f"collision: namespace {namespace!r} already mounted",
+                    "reason": (
+                        f"collision: namespace {namespace!r} is served by newer pack "
+                        f"{seen[namespace]}"
+                    ),
                 }
             )
             continue
-        seen.add(namespace)
+        seen[namespace] = pack_path
         packs.append((namespace, typed, str(pack_path)))
         if typed.instructions:
             contracts.append(typed.instructions)
+    # Resolution ran newest-first; report in path order so output is stable across restarts.
+    packs.sort(key=lambda pack: pack[2])
+    skipped.sort(key=lambda entry: entry["pack_path"])
 
     index: dict[str, dict[str, Any]] | None = None
 

@@ -349,20 +349,26 @@ async def test_one_bad_pack_among_good_ones_continues(two_distinct_packs, bad_to
     assert [entry["pack_path"] for entry in manifest["skipped"]] == [str(bad_toolpack)]
 
 
-async def test_two_packs_same_domain_second_is_rejected(tmp_path):
-    """Two packs on one base_domain sanitize to the same Chart key, so the second is
-    recorded as skipped rather than shadowing the first."""
+async def test_two_packs_same_domain_newest_wins(tmp_path):
+    """Two packs on one base_domain sanitize to the same Chart key, so only one mounts and
+    the other is recorded as skipped. The newer one wins, not the one whose path sorts
+    first: re-mapping a site writes a fresh ``chart-<host>-<hash>/`` beside the stale one,
+    and path order let an early capture shadow every later one -- along with the
+    operations only the later captures recorded."""
     base = json.loads(_FIXTURE_TOOLPACK.read_text())
-    p1 = tmp_path / "p1.json"
-    p2 = tmp_path / "p2.json"
-    p1.write_text(json.dumps(base))
-    p2.write_text(json.dumps(base))
-    os.environ["ASTROLABE_TOOLPACKS"] = f"{p1},{p2}"
+    stale = tmp_path / "a-stale.json"
+    fresh = tmp_path / "b-fresh.json"
+    stale.write_text(json.dumps(base))
+    fresh.write_text(json.dumps(base))
+    os.utime(stale, (1_000_000_000, 1_000_000_000))
+    os.utime(fresh, (2_000_000_000, 2_000_000_000))
+    os.environ["ASTROLABE_TOOLPACKS"] = f"{stale},{fresh}"
     server = create_server()
     manifest = await _manifest(server)
     assert list(manifest["charts"]) == [_PACK_DOMAIN_SANITIZED]
-    assert [entry["pack_path"] for entry in manifest["skipped"]] == [str(p2)]
-    assert "collision" in manifest["skipped"][0]["reason"]
+    assert [entry["pack_path"] for entry in manifest["skipped"]] == [str(stale)]
+    reason = manifest["skipped"][0]["reason"]
+    assert "collision" in reason and str(fresh) in reason
 
 
 # ----- the contract carrier --------------------------------------------------
