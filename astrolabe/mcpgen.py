@@ -1074,7 +1074,7 @@ def main(argv: list[str] | None = None) -> None:
     # installed runtime rejects at startup.
     from pathlib import Path
 
-    from .mcp_server import Settings, _validate_pack
+    from .toolpack import Settings, _validate_pack
 
     try:
         _validate_pack(pack, Settings(Path(a.out or "toolpack.json")))

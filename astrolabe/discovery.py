@@ -279,6 +279,10 @@ def pipeline_discovery_corpus(
             name = operation.get("operationName")
             persisted = operation.get("persistedHash")
             kind = str(operation.get("semantic_kind") or "unknown")
+            # A GET request cannot carry a mutation per the GraphQL-over-HTTP spec;
+            # upgrade persisted queries sent via GET from unknown to query.
+            if kind == "unknown" and method in {"GET", "HEAD", "OPTIONS"}:
+                kind = "query"
             request_template = {
                 "method": method,
                 "url": url,

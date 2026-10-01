@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import dataclasses
 import json
@@ -24,9 +25,9 @@ from mcp.types import TextContent
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 
-import astrolabe.mcp_server as server_module
+import astrolabe.sextant as server_module
 from astrolabe.ir import graph_from_inventory, write_graph
-from astrolabe.mcp_server import (
+from astrolabe.sextant import (
     ConfigurationError,
     CredentialProvider,
     FileCredentialProvider,
@@ -36,13 +37,13 @@ from astrolabe.mcp_server import (
     Runtime,
     SemanticKind,
     Settings,
+    _chart_server,
     _parser,
     _provider_specs,
     _remote_auth,
     _remote_profile,
     _safe_headers,
     _validate_pack,
-    create_server,
 )
 
 
@@ -103,7 +104,7 @@ async def test_verify_operation_reports_actual_proof(
 
     monkeypatch.setattr(Runtime, "execute", execute)
     settings, _ = configured
-    async with Client(create_server(settings)) as client:
+    async with Client(_chart_server(settings)) as client:
         result = await client.call_tool(
             "verify_operation",
             {
@@ -767,7 +768,7 @@ async def test_expired_token_reaches_the_agent_as_an_error(
             return Response()
 
     monkeypatch.setattr(Runtime, "_session", lambda self, *_args: Session())
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         result = await client.call_tool("jobSearch", {"page": 1}, raise_on_error=False)
     assert result.is_error is True
@@ -781,7 +782,7 @@ async def test_fastmcp_lists_tools_resources_and_prompt(
 ) -> None:
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         tools = await client.list_tools()
         resources = await client.list_resources()
@@ -818,7 +819,7 @@ async def test_manifest_count_matches_provider_when_subscription_is_inventoried(
     )
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         tools = await asyncio.wait_for(client.list_tools(), timeout=5)
         manifest = json.loads(
@@ -874,7 +875,7 @@ async def test_graph_discovery_tools_are_safe_and_include_graph_only_operations(
     pack_path = tmp_path / "toolpack.json"
     pack_path.write_text(json.dumps(pack))
     write_graph(tmp_path / "graph.json", graph)
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
 
     async with Client(server) as client:
         search = await client.call_tool("search_operations", {"query": "Viewer"})
@@ -1224,7 +1225,7 @@ async def test_missing_path_parameter_is_a_clean_failure(tmp_path, rest_pack) ->
 async def test_rest_tools_are_listed_with_transport_metadata(tmp_path, rest_pack) -> None:
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(rest_pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         tools = await client.list_tools()
         manifest = json.loads((await client.read_resource("astrolabe://manifest"))[0].text)
@@ -1304,7 +1305,7 @@ async def test_generated_output_schema_is_advertised(tmp_path, pack) -> None:
     }
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         tools = await client.list_tools()
         manifest = json.loads((await client.read_resource("astrolabe://manifest"))[0].text)
@@ -1321,7 +1322,7 @@ async def test_generated_output_schema_is_advertised(tmp_path, pack) -> None:
 async def test_output_schema_falls_back_to_open_object(tmp_path, pack) -> None:
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         tools = await client.list_tools()
     assert _named_tool(tools, "jobSearch").output_schema == {
@@ -1340,7 +1341,7 @@ async def test_fastmcp_enforces_generated_input_schema(
     # more legible: the envelope names the offending path and the failing validator.
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         with pytest.raises(ToolError) as excinfo:
             await client.call_tool("jobSearch", {"page": "not-an-integer"})
@@ -1990,7 +1991,7 @@ async def test_health_resource_exposes_refresh_state_without_leaking_secrets(
         retries=1,
         auth_refresh_command=("mint-token", "--secret-flag", secret_token),
     )
-    server = create_server(settings)
+    server = _chart_server(settings)
     async with Client(server) as client:
         health = json.loads((await client.read_resource("astrolabe://health"))[0].text)
         manifest = json.loads((await client.read_resource("astrolabe://manifest"))[0].text)
@@ -2432,7 +2433,7 @@ async def test_remote_http_publishes_metadata_and_rejects_untrusted_headers(
     profile = _test_remote_profile(tmp_path, monkeypatch, pair)
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True), auth=_remote_auth(profile))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True), auth=_remote_auth(profile))
     app = server.http_app(
         path=profile.path,
         stateless_http=True,
@@ -2617,7 +2618,7 @@ def test_declared_operations_accept_pure_inventory(tmp_path, pack):
 def _discovery_server(tmp_path: Path, pack: dict[str, Any]):
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    return create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    return _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
 
 
 def _as_dict(result: Any) -> dict[str, Any]:
@@ -2662,7 +2663,7 @@ async def test_discovery_carries_the_operations_input_schema(tmp_path, pack):
 @pytest.mark.asyncio
 async def test_search_pages_without_silent_truncation(tmp_path, pack, monkeypatch):
     """The 200 cap used to be invisible while count reported the pre-cap total."""
-    monkeypatch.setattr("astrolabe.mcp_server._SEARCH_PAGE", 1)
+    monkeypatch.setattr("astrolabe.sextant._SEARCH_PAGE", 1)
     server = _discovery_server(tmp_path, pack)
     async with Client(server) as client:
         first = _as_dict(await client.call_tool("search_operations", {}))
@@ -2726,7 +2727,7 @@ def _graph_file(tmp_path: Path) -> Path:
 async def test_trace_surface_names_the_valid_identifiers(tmp_path, pack):
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(
+    server = _chart_server(
         Settings(
             pack_path,
             allow_anonymous=True,
@@ -2800,7 +2801,7 @@ async def test_refusals_carry_a_next_action_when_one_applies(tmp_path, pack):
 def _coverage_server(tmp_path: Path, pack: dict[str, Any], *, anonymous: bool):
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    return create_server(Settings(pack_path, allow_anonymous=anonymous, retries=1))
+    return _chart_server(Settings(pack_path, allow_anonymous=anonymous, retries=1))
 
 
 @pytest.mark.asyncio
@@ -2883,7 +2884,7 @@ async def test_server_instructions_declare_target_text_untrusted(tmp_path, pack)
 
 
 def test_validate_pack_rejects_an_over_long_description(tmp_path):
-    from astrolabe.mcp_server import MAX_TOOL_DESCRIPTION_CHARS
+    from astrolabe.toolpack import MAX_TOOL_DESCRIPTION_CHARS
 
     oversized = "x" * (MAX_TOOL_DESCRIPTION_CHARS + 1)
     with pytest.raises(ConfigurationError, match="description exceeds"):
@@ -2909,7 +2910,7 @@ def test_validate_pack_rejects_an_over_long_description(tmp_path):
 
 def test_validate_pack_accepts_a_description_at_the_cap(tmp_path):
     """The cap must not clip legitimate signal, so the boundary is inclusive."""
-    from astrolabe.mcp_server import MAX_TOOL_DESCRIPTION_CHARS
+    from astrolabe.toolpack import MAX_TOOL_DESCRIPTION_CHARS
 
     at_cap = "x" * MAX_TOOL_DESCRIPTION_CHARS
     validated = _validate_pack(
@@ -2957,9 +2958,155 @@ async def test_tool_resource_still_returns_the_raw_alias_as_data(tmp_path):
     }
     pack_path = tmp_path / "pack.json"
     pack_path.write_text(json.dumps(pack))
-    server = create_server(Settings(pack_path, allow_anonymous=True, retries=1))
+    server = _chart_server(Settings(pack_path, allow_anonymous=True, retries=1))
     async with Client(server) as client:
         # read_resource returns the content list directly in this fastmcp version.
         contents = await client.read_resource(f"astrolabe://tools/{pack['tools'][0]['name']}")
     blob = "".join(getattr(block, "text", "") for block in contents)
     assert HOSTILE_ALIAS in blob, "the raw alias must still be readable as data"
+
+
+# ----- the execution trust surface ------------------------------------------
+
+# sextant exists so that executing a typed contract sits behind its own trust
+# boundary. The boundary is the absence of things, and an absence asserted in prose
+# decays the first time somebody adds an import, so it is asserted here instead.
+#
+# Each entry below can reach a real browser, decrypt a cookie, read an operator
+# allowlist, or fetch on its own initiative. None of them is reachable from sextant.
+# `media` is deliberately NOT here: it is a value-free content-type classifier with no
+# browser, subprocess or network reference, and mcpgen legitimately needs it.
+_CAPTURE_SIDE_MODULES = frozenset(
+    {
+        "analyze",
+        "browser",
+        "browser_cookies",
+        "capture",
+        "capture_parallel",
+        "contract_store",
+        "discovery",
+        "mapping_mcp",
+        "profile",
+        "recipe",
+        "recipe_runtime",
+        "recipe_worker",
+        "scan",
+        "session_registry",
+        "storefront",
+    }
+)
+
+# The four operator allowlists AGENTS.md protects. They are enforced capture-side and
+# are read by no execution-path module; an agent that could widen its own
+# authorization envelope would make the gate meaningless.
+_CAPTURE_SIDE_ENV = (
+    "ASTROLABE_BROWSER_AUTH_DOMAINS",
+    "ASTROLABE_SESSION_DOMAINS",
+    "ASTROLABE_CDP_ENDPOINTS",
+    "ASTROLABE_BROWSER_EGRESS",
+)
+
+
+def _transitive_astrolabe_imports(entry: str) -> set[str]:
+    """Every astrolabe module reachable from ``entry``, walked statically.
+
+    The whole module tree is walked, not just its top level, so a deferred or
+    function-local import counts too -- ``mcp_server`` reaches ``relay`` that way, and a
+    guard that only read the import block would miss it.
+    """
+    root = Path(server_module.__file__).resolve().parent
+    seen: set[str] = set()
+    pending = [entry]
+    while pending:
+        name = pending.pop()
+        if name in seen or name.startswith("_"):
+            continue
+        seen.add(name)
+        source = root / f"{name}.py"
+        if not source.is_file():
+            continue
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                if node.module:
+                    pending.append(node.module)
+                else:
+                    pending.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                pending.extend(
+                    alias.name.split(".")[1]
+                    for alias in node.names
+                    if alias.name.startswith("astrolabe.")
+                )
+    return seen
+
+
+def test_sextant_cannot_reach_the_capture_surface() -> None:
+    closure = _transitive_astrolabe_imports("sextant")
+    assert "sextant" in closure, "the walk found nothing; it is broken, not passing"
+    leaks = sorted(closure & _CAPTURE_SIDE_MODULES)
+    assert not leaks, (
+        f"execution server reaches capture-side modules {leaks}; sextant's trust "
+        f"boundary is the absence of these, and an indirect import counts"
+    )
+
+
+def test_no_capture_side_allowlist_is_read_in_sextants_closure() -> None:
+    """The env knobs execution can be configured by, read rather than merely mentioned.
+
+    The distinction matters: ``astrolabe/security.py`` defines ``EGRESS_ENV`` as a
+    module constant for the capture layer's use, and sextant imports that module for
+    unrelated reasons (``DENIED_HEADERS``, ``validate_url``, ``host_matches``). Its
+    presence is inert. A grep for the name would flag it, and a flag that fires on an
+    inert constant trains the next reader to ignore it, which is how a real read gets
+    waved through. So this resolves the actual ``os.environ`` accesses.
+    """
+    root = Path(server_module.__file__).resolve().parent
+    read: dict[str, set[str]] = {}
+    for name in sorted(_transitive_astrolabe_imports("sextant")):
+        source = root / f"{name}.py"
+        if not source.is_file():
+            continue
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            # os.environ.get("X") / os.getenv("X")
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"get", "getenv"} and node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        names.add(first.value)
+            # os.environ["X"]
+            elif (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)
+            ):
+                names.add(node.slice.value)
+        knobs = {n for n in names if n.startswith("ASTROLABE_")}
+        if knobs:
+            read[name] = knobs
+    consulted = set().union(*read.values()) if read else set()
+    offenders = sorted(consulted & set(_CAPTURE_SIDE_ENV))
+    assert not offenders, (
+        f"capture-side allowlist consulted inside the execution closure: {offenders} in {read}"
+    )
+    # And positively: execution is configured by pack, credential and budget knobs. A
+    # new one is a deliberate edit to this set, not a silent arrival.
+    assert {"ASTROLABE_TOOLPACK", "ASTROLABE_AUTH"} <= consulted, (
+        f"expected the pack/credential knobs to be read; saw {sorted(consulted)}"
+    )
+
+
+def test_sextant_shares_the_pack_validator_instead_of_inlining_one() -> None:
+    """The other direction, so the boundary cannot be 'fixed' by forking the gate.
+
+    ``toolpack`` is the single chokepoint where a pack's on-disk contract is validated,
+    shared by generation and serving. If sextant carried its own copy, the two could
+    drift and a green ``astrolabe mcp-gen`` would stop meaning "the installed runtime
+    can serve this".
+    """
+    closure = _transitive_astrolabe_imports("sextant")
+    assert "toolpack" in closure, "sextant stopped sharing the pack validator"
+    assert "mcpgen" in closure, (
+        "mcpgen supplies envelope_schema for the discovery schema; if that moved, "
+        "re-point it deliberately rather than letting the import vanish"
+    )

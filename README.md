@@ -133,9 +133,9 @@ fast with an install hint rather than silently falling back.
 The native mapping MCP entry point is `astrolabe-mapping-mcp` (or
 `python -m astrolabe.mapping_mcp`). Charts, run logs, and staged credentials
 live in `ASTROLABE_WORKSPACE`, defaulting to `$XDG_DATA_HOME/astrolabe`
-(`~/.local/share/astrolabe`). Serve a generated Chart with `astrolabe-mcp`.
+(`~/.local/share/astrolabe`). Serve a generated Chart with `sextant-mcp`.
 
-`astrolabe-mapping-mcp` exposes exactly these twelve tools:
+`astrolabe-mapping-mcp` exposes exactly these eleven tools:
 
 | tool | what it does |
 |---|---|
@@ -146,20 +146,34 @@ live in `ASTROLABE_WORKSPACE`, defaulting to `$XDG_DATA_HOME/astrolabe`
 | `verify_chart` | re-execute a Chart's reads in a warm browser to earn `verified-active` proof |
 | `import_har` | chart a HAR recorded elsewhere; proof is labelled `imported` |
 | `generate_chart` | regenerate a Chart (optionally with `read_pattern` for POST-based searches) |
-| `chart_status` | report which Charts are mounted, which were skipped and why |
 | `preflight` | check local capture services and the active egress policy |
 | `list_charts` | list generated Chart paths without reading credentials or captures |
 | `register_session` | store a session you already hold and get back an opaque handle |
 | `revoke_session` | revoke a registered session so its handle stops working |
 
-`astrolabe-unified-mcp` serves those same twelve plus the discovery pair that
-replaced per-Chart tool mounting. Mounted Charts are no longer flattened into one
-tool list; an agent finds the operation, then calls it:
+### Execution: `sextant-mcp`
+
+`sextant-mcp` is the execution-only companion, and the two servers are separate on
+purpose. Capture and mapping touch a browser, cookies and a keyring; execution does
+not, so it sits behind its own trust boundary — `astrolabe.sextant` does not import
+the capture/mapping layer or the browser stack.
+
+It reads `ASTROLABE_TOOLPACK` (one Chart) or `ASTROLABE_TOOLPACKS` (a CSV of paths,
+or a directory holding `chart-*/toolpack.json`) and serves every Chart it finds. Its
+public surface is exactly two tools, and it does not grow with the number of Charts:
 
 | tool | what it does |
 |---|---|
 | `search_tools` | find callable operations across every mounted Chart, by name or description |
 | `call_tool` | invoke one operation by the `operation_id` `search_tools` returned |
+
+Mounted Charts are not flattened into one tool list. An agent finds the operation,
+reads its contract, then calls it. Alongside the tools it serves the
+`astrolabe://manifest` resource (every mounted Chart's non-secret metadata, plus which
+packs were skipped and why), `astrolabe://health` (credential-refresh state per Chart),
+`astrolabe://tools/{chart}/{name}` (one operation's details, without its captured query
+text — the non-tool channel untrusted target text is meant to be read on), and the
+`use_astrolabe` prompt.
 
 ### Registering a session the agent already holds
 
@@ -242,7 +256,7 @@ process, so an agent cannot widen its own authorization envelope.
 | `ASTROLABE_CDP_ENDPOINTS` | empty | exact loopback `cdp_endpoint` values `map_site` may attach to |
 | `ASTROLABE_BROWSER_EGRESS` | `allow-third-party` | `first-party-only` aborts and records every non-first-party request |
 | `ASTROLABE_MCP_SPAWN` | unset | `1` puts every dispatched command back on one-subprocess-per-call |
-| `ASTROLABE_TOOLPACK`, `ASTROLABE_COOKIES`, `ASTROLABE_AUTH` | unset | what `astrolabe-mcp` serves for a generated Chart |
+| `ASTROLABE_TOOLPACK`, `ASTROLABE_TOOLPACKS`, `ASTROLABE_COOKIES`, `ASTROLABE_AUTH` | unset | which Charts `sextant-mcp` serves, and with what credentials |
 | `FASTMCP_TELEMETRY_MODE` | `native` | FastMCP's OpenTelemetry instrumentation, see below |
 
 The last row is the vendor's own setting, deliberately not aliased. FastMCP 4
@@ -296,7 +310,7 @@ astrolabe contract <capture-dir> \        # versioned typed inventory + observat
 astrolabe mcp-gen <capture-dir> \         # generate a typed MCP toolpack from a capture
     --overrides surfaces                    # use curated minimal queries where available
     # -> toolpack.json: typed tools only for safely classified, runtime-compatible ops.
-    # Serve with `astrolabe-mcp` (FastMCP; env: ASTROLABE_TOOLPACK/COOKIES/AUTH).
+    # Serve with `sextant-mcp` (FastMCP; env: ASTROLABE_TOOLPACK/COOKIES/AUTH).
 
 astrolabe replay example.com --op op.json \   # browserless, TLS-matched, high-frequency replay
     --cookies-file cookies.json --auth-file auth.map.json \  # both bring-your-own

@@ -20,16 +20,17 @@ import pytest
 from fastmcp import Client
 
 from astrolabe.mapping_mcp import create_server
-from astrolabe.unified_mcp import create_unified_server
+from astrolabe.sextant import create_server as create_execution_server
 
 ROOT = Path(__file__).resolve().parents[1]
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 SECURITY_DOC = ROOT / "docs" / "relay-and-browser-auth.md"
 
-MAPPING_TABLE_ANCHOR = "`astrolabe-mapping-mcp` exposes exactly these twelve tools:"
-UNIFIED_TABLE_ANCHOR = (
-    "`astrolabe-unified-mcp` serves those same twelve plus the discovery pair that\n"
-    "replaced per-Chart tool mounting."
+MAPPING_TABLE_ANCHOR = "`astrolabe-mapping-mcp` exposes exactly these eleven tools:"
+# Execution is its own server (astrolabe.sextant), so its table is checked against that
+# server's live surface rather than derived as a difference against the mapping one.
+SEXTANT_TABLE_ANCHOR = (
+    "public surface is exactly two tools, and it does not grow with the number of Charts:"
 )
 PROOF_SECTION_HEADING = "## Native Instagram dogfood"
 
@@ -108,16 +109,15 @@ async def test_readme_tool_table_matches_the_live_mapping_server(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_readme_discovery_pair_matches_the_live_unified_server(tmp_path):
-    """`astrolabe-unified-mcp` is the mapping surface plus the collapsed pair.
+async def test_readme_discovery_pair_matches_the_live_execution_server():
+    """`sextant-mcp` is the execution-only companion: exactly the discovery pair.
 
-    Deriving the extras from the live difference rather than from a second
-    hand-kept list means a tool that appears on only one of the two servers is
-    caught by the first test, and the second only has to know about the pair.
+    Asserted against the live sextant surface rather than as a difference against the
+    mapping server, because the two no longer overlap — execution sits behind its own
+    trust boundary — so a tool appearing on either server is caught by whichever table
+    names it.
     """
-    mapping = await _live(lambda: create_server(tmp_path))
-    unified = await _live(create_unified_server)
-    assert _documented_tools(README, UNIFIED_TABLE_ANCHOR) == unified - mapping
+    assert _documented_tools(README, SEXTANT_TABLE_ANCHOR) == await _live(create_execution_server)
 
 
 def _artifacts_written_by(module: str) -> set[str]:
@@ -148,9 +148,9 @@ def test_every_documented_proof_artifact_is_written_by_the_named_command():
     contract = _proof_table()["`astrolabe contract --execute`"]
     assert contract == _artifacts_written_by("contract_verify.py")
 
-    mcp_server = (ROOT / "astrolabe" / "mcp_server.py").read_text(encoding="utf-8")
-    for name in _proof_table()["the Chart MCP server (`astrolabe-mcp`)"]:
-        assert f'"{name}"' in mcp_server, f"the Chart MCP server does not write {name}"
+    sextant = (ROOT / "astrolabe" / "sextant.py").read_text(encoding="utf-8")
+    for name in _proof_table()["the Chart MCP server (`sextant-mcp`)"]:
+        assert f'"{name}"' in sextant, f"the Chart MCP server does not write {name}"
 
 
 def test_proof_section_names_no_artifact_outside_its_table():

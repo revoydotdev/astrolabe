@@ -498,15 +498,18 @@ async def test_import_har_runs_the_real_pipeline_into_a_chart(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_chart_status_without_provenance_is_honest(tmp_path):
-    """The mapping server can run without the unified facade's mount data. It must
-    report the empty case rather than omit the keys."""
+async def test_missing_arguments_name_the_way_out(tmp_path):
+    """An omitted required argument is an authored refusal that points at the call that
+    would have supplied it, not a bare KeyError."""
+    refusals = {}
     async with Client(create_server(tmp_path)) as client:
-        status = (await client.call_tool("chart_status", {})).data
-    assert status["mounted"] == {}
-    assert status["skipped"] == []
-    assert status["charts_on_disk_not_mounted"] == []
-    assert status["code_root"] and status["runtime_module_path"]
+        for name in ("generate_chart", "map_site"):
+            with pytest.raises(ToolError) as excinfo:
+                await client.call_tool(name, {})
+            refusals[name] = str(excinfo.value)
+    assert "capture_directory is required" in refusals["generate_chart"]
+    assert "list_charts" in refusals["generate_chart"]
+    assert "domain is required" in refusals["map_site"]
 
 
 # ----- register_session: the agent-held credential trust boundary ------------

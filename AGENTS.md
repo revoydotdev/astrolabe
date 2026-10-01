@@ -44,9 +44,18 @@ acknowledgement. Historical example artifacts are documentation, not contracts.
 
 Shape-only capture is the guarantee: no payload values are persisted, credentials
 never enter a generated chart, and the operator allowlists default to empty. Do not
-weaken `verification_allowed` (`astrolabe/operation.py:71-88`), the
-`semantic_kind == "query"` guard (`astrolabe/mcp_server.py:2794`), the allowlists, or
-the shape-only guarantee to make a test pass.
+weaken `verification_allowed` (`astrolabe/operation.py:71-88`, reached only from
+`astrolabe/contract_verify.py:299` — it gates active re-verification, not serving), the
+query-only invocation guards (`astrolabe/sextant.py:2637` and `:2666`, which refuse
+anything whose `type` is not `SemanticKind.QUERY`), the mutation gate
+(`astrolabe/sextant.py:1290`), the allowlists, or the shape-only guarantee to make a
+test pass.
+
+The capture-side allowlists are enforced in the mapping layer and are read by no
+execution-path module; that separation is the reason `sextant` exists as its own
+server, and it is asserted rather than asserted-in-prose by
+`test_sextant_cannot_reach_the_capture_surface` and
+`test_no_capture_side_allowlist_is_read_in_sextants_closure`. Keep them passing.
 
 These controls reduce accidental disclosure; they do not make the tool impossible
 to misuse. The operator, OS account, browser, keyring, dependencies and the

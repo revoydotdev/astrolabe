@@ -1,6 +1,6 @@
 """Tests for the shared retry policy in astrolabe.transport.
 
-The policy is now consulted by three tiers (mcp_server, storefront, replay), so
+The policy is now consulted by three tiers (sextant, storefront, replay), so
 these assert the arithmetic and the classification rather than any one caller's
 use of them.
 """
@@ -93,7 +93,7 @@ def test_permanent_verdicts_are_not_retryable():
     assert not RETRYABLE_STATUS & {400, 401, 403, 404, 422}
 
 
-def test_mcp_server_shares_this_status_set():
-    from astrolabe import mcp_server
+def test_sextant_shares_this_status_set():
+    from astrolabe import sextant
 
-    assert set(mcp_server._RETRYABLE_STATUS) == set(RETRYABLE_STATUS)
+    assert set(sextant._RETRYABLE_STATUS) == set(RETRYABLE_STATUS)

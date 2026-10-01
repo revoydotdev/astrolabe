@@ -41,9 +41,8 @@ Repository = "https://github.com/revoydotdev/astrolabe"
 
 [project.scripts]
 astrolabe = "astrolabe.cli:main"
-astrolabe-mcp = "astrolabe.mcp_server:main_sync"
+sextant-mcp = "astrolabe.sextant:main_sync"
 astrolabe-mapping-mcp = "astrolabe.mapping_mcp:main"
-astrolabe-unified-mcp = "astrolabe.unified_mcp:main"
 
 [project.optional-dependencies]
 browser-auth = ["cryptography>=43", "secretstorage>=3.3; sys_platform == 'linux'", "publicsuffixlist>=1.0"]
@@ -55,7 +54,7 @@ dev = [
     "types-jsonschema>=4.23",
     "pytest-asyncio>=1.0",
     # The MCP SDK moved its HTTP stack to httpx2, which drops httpx from the
-    # dependency tree. tests/test_mcp_server.py still drives a local Starlette
+    # dependency tree. tests/test_sextant.py still drives a local Starlette
     # ASGI app directly rather than through the SDK transport, so it needs httpx
     # as a direct dev dependency or it fails to import wherever cloakbrowser
     # (its only other requirer) is not installed, such as CI.

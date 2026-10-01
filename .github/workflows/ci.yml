@@ -66,13 +66,13 @@ jobs:
 
       - name: Assert the async MCP tests actually ran
         run: |
-          # 25 of these 36 tests are coroutines that only execute because
+          # 18 of these 29 tests are coroutines that only execute because
           # asyncio_mode = "auto" is set in pyproject.toml. That setting is the
           # only thing making them run, so assert the count: a revert has to fail
           # the build rather than quietly leave half the MCP surface untested.
-          out=$(uv run pytest tests/test_unified_mcp.py --no-cov -p no:cacheprovider)
+          out=$(uv run pytest tests/test_sextant_charts.py --no-cov -p no:cacheprovider)
           echo "$out"
-          echo "$out" | grep -qE '^36 passed' || {
-            echo "::error::expected 36 passed from test_unified_mcp.py; asyncio_mode = \"auto\" in pyproject.toml is what makes its 25 async tests execute. Bump this count in ci.yml if the file legitimately gained or lost a test."
+          echo "$out" | grep -qE '^29 passed' || {
+            echo "::error::expected 29 passed from test_sextant_charts.py; asyncio_mode = \"auto\" in pyproject.toml is what makes its 18 async tests execute. Bump this count in ci.yml if the file legitimately gained or lost a test."
             exit 1
           }

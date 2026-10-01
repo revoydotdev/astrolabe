@@ -41,7 +41,7 @@ astrolabe map example.com --local --no-burp \
   --seeds https://example.com/feed --max-total-requests 100
 ```
 
-Use the generated Chart server (`astrolabe-mcp`, `ASTROLABE_TOOLPACK`,
+Use the generated Chart server (`sextant-mcp`, `ASTROLABE_TOOLPACK`,
 `ASTROLABE_COOKIES`, and an exact per-operation `ASTROLABE_AUTH` header map)
 for `verify_operation` and `invoke_query`. Verification reports schema validation,
 success, timestamp, and the persisted document hash. Discovery and HTTP success

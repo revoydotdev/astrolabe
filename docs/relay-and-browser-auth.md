@@ -231,7 +231,7 @@ Three observed REST writes remain gated.
 |---|---|---|
 | `verify.json` | `astrolabe contract --execute` | the per-operation verification record, keyed by operation |
 | `active-verification.json` | `astrolabe contract --execute` | the same records as a list, each with the derived `ok` flag `mcp-gen --require-active-proof` reads |
-| `verification.jsonl` | the Chart MCP server (`astrolabe-mcp`) | one appended value-free proof record per verified call, beside the toolpack |
+| `verification.jsonl` | the Chart MCP server (`sextant-mcp`) | one appended value-free proof record per verified call, beside the toolpack |
 
 The two writers are different processes and the three names are not
 interchangeable. The Chart MCP server's journal is a durability log for calls

@@ -405,6 +405,9 @@ def build(recs, meta):
                 continue
             oid = op_id(r, o)
             kind = o.get("semantic_kind") or semantic_kind(o.get("query")).value
+            # GET cannot carry a mutation; upgrade persisted queries sent via GET.
+            if kind == "unknown" and r.get("method") in {"GET", "HEAD", "OPTIONS"}:
+                kind = "query"
             protocol = (
                 o.get("protocol")
                 or graphql_protocol(

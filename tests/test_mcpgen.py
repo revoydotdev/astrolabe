@@ -1340,7 +1340,7 @@ def test_operation_with_no_variables_is_not_gated(tmp_path):
 
 def test_gated_pack_still_validates(tmp_path):
     """Gating must not produce a pack the runtime would reject."""
-    from astrolabe.mcp_server import Settings, _validate_pack
+    from astrolabe.toolpack import Settings, _validate_pack
 
     _query_capture(tmp_path, query="query Viewer($id: ID!) { viewer(id: $id) { id } }")
     pack = build_pack(str(tmp_path))
