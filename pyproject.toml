@@ -21,7 +21,7 @@ keywords = ["graphql", "recon", "mcp", "model-context-protocol", "api", "web"]
 
 dependencies = [
     # FastMCP 3.4 targets the current stable official Python SDK 1.x line.
-    "mcp>=1.29,<2",
+    "mcp>=1.30.0,<2",
     "fastmcp>=3.4.5,<4",
     "curl-cffi>=0.7",
     "requests>=2.31",
