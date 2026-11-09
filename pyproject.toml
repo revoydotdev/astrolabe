@@ -23,7 +23,7 @@ dependencies = [
     # FastMCP 4 is built on the official Python MCP SDK v2 line; the two are
     # coupled, so they move together.
     "mcp>=2.2,<3",
-    "fastmcp>=4.0.10,<5",
+    "fastmcp>=4.1.2,<5",
     "curl-cffi>=0.7",
     "requests>=2.31",
     "jsonschema>=4.23",
