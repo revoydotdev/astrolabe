@@ -11,7 +11,22 @@ cookie file or explicit domain-scoped Linux browser import via --browser.
 """
 
 from __future__ import annotations
-import argparse, contextlib, functools, hashlib, io, json, os, re, shutil, signal, subprocess, sys, shlex, tempfile, time, types, uuid
+import argparse
+import contextlib
+import functools
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import shlex
+import tempfile
+import types
+import uuid
 from collections.abc import Callable
 from enum import IntEnum
 from typing import Any
@@ -22,7 +37,8 @@ from . import contract_store
 from . import profile as prof
 from . import browser as br
 from .artifact import atomic_write_json
-from .security import normalize_host, safe_text
+from .security import egress_policy, normalize_host, retain_raw, safe_text, validate_url
+from .capture import normalize_cookies
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _CLEANUP_STACK: list[list[Callable[[], Any]]] = []
@@ -392,12 +408,15 @@ def put(hp, src, dst):
     )
 
 
-def get(hp, src, dst):
-    """Pull a required artifact back, failing closed if it is unavailable."""
+def get(hp, src, dst, required=True):
+    """Pull an artifact back. Fails closed by default; pass required=False
+    to skip silently when the source is missing (best-effort pull)."""
     if hp.local:
         s = os.path.expanduser(src)
         if not os.path.isfile(s):
-            raise FileNotFoundError(f"required remote artifact does not exist locally: {s}")
+            if required:
+                raise FileNotFoundError(f"required remote artifact does not exist locally: {s}")
+            return None
         return _require_success(run(["cp", s, dst]), f"copy artifact {src}")
     safe_src = _validate_remote_path(src)
     return _require_success(
@@ -553,6 +572,11 @@ def preflight(hp, verbose=True):
     info["egress_status"] = (
         "match" if info["egress_match"] else "unavailable" if not li or not hi else "mismatch"
     )
+    # The browser egress policy, so an agent can see what the capture browser is allowed
+    # to reach before it runs a capture rather than inferring it from a truncation list.
+    # Reported as configured, not as enforced: a capture resolves it itself and records
+    # the resolved value in meta.json.
+    info["browser_egress_policy"] = egress_policy()
     if verbose:
         print("── preflight ──────────────────────────────")
         for k in (
@@ -569,6 +593,7 @@ def preflight(hp, verbose=True):
             "egress_host",
             "egress_match",
             "egress_status",
+            "browser_egress_policy",
         ):
             print(f"  {k:14} {info[k]}")
         if not info["egress_match"]:
@@ -645,6 +670,83 @@ def _publish_contract(a, domain: str, produced: str) -> None:
     print(f"[contract] contract of record for {domain} -> {published}")
 
 
+def _analyze_contract_and_seal(
+    out: str,
+    final_out: str,
+    dom: str,
+    a,
+    *,
+    run_id: str,
+    artifact_type: str,
+    extra_artifact_names: tuple[str, ...] = (),
+) -> list[str]:
+    """Shared tail of the capture pipeline: analyze -> durable typed contract ->
+    artifact manifest. Used by both `astrolabe map` (after a live capture) and
+    `astrolabe import-har` (after converting a HAR into the same capture-dir
+    shape produced by capture.py's flush_meta()), so the two commands stay
+    identical from this point on. Returns the sealed artifact name list,
+    including the manifest file itself; the caller still promotes the staging
+    directory.
+    """
+    recs, meta = az.load(out)
+    prior_graph = os.path.join(final_out, "graph.json")
+    nops, nrest = az.render(
+        out, recs, meta, prior_graph=prior_graph if os.path.exists(prior_graph) else None
+    )
+    print(f"[analyze] {nops} gql ops, {nrest} rest -> {out}/map.md")
+
+    # durable typed contract (observed proof) — merges the prior contract in this
+    # out dir so the map completes across runs and drift is surfaced. The contract,
+    # not the map, is the artifact downstream active tooling depends on.
+    prior = _prior_contract(a, dom) or os.path.join(final_out, "contract.json")
+    import sys as _s
+
+    _s.argv = ["contract", out] + (["--merge", str(prior)] if os.path.exists(prior) else [])
+    ct.main()
+    _publish_contract(a, dom, os.path.join(out, "contract.json"))
+
+    required = (
+        "capture.jsonl",
+        "meta.json",
+        "graphql-names.txt",
+        "transfer-manifest.json",
+        "graph.json",
+        "map.md",
+        "endpoints.json",
+        "contract.json",
+        "contract.md",
+    )
+    missing = [name for name in required if not os.path.isfile(os.path.join(out, name))]
+    if missing:
+        raise PartialCaptureError(
+            f"run is partial; required staged artifacts missing: {', '.join(missing)}"
+        )
+    promoted = list(required) + [
+        name for name in extra_artifact_names if os.path.isfile(os.path.join(out, name))
+    ]
+    from .artifact import build_manifest, utc_now, write_manifest
+
+    now = utc_now()
+    manifest = build_manifest(
+        out,
+        artifact_type=artifact_type,
+        artifact_schema_version=1,
+        run_id=str(meta.get("run_id") or run_id),
+        target=dom,
+        completeness="complete",
+        started_at=str(meta.get("started_at") or meta.get("captured_at") or now),
+        completed_at=str(meta.get("completed_at") or meta.get("captured_at") or now),
+        artifact_names=promoted,
+        profile=getattr(a, "profile", None),
+        failures=list(meta.get("failures") or []),
+        truncations=dict(meta.get("truncations") or {}),
+        safety_mode="read-only",
+    )
+    write_manifest(os.path.join(out, "artifact-manifest.json"), manifest)
+    promoted.append("artifact-manifest.json")
+    return promoted
+
+
 @_guaranteed_cleanup
 def cmd_map(a):
     hp = _resolve(a)
@@ -656,16 +758,30 @@ def cmd_map(a):
             "native browser import requires local capture and cannot combine with "
             "--no-auth, --cookies-file, recipes, or HAR/OpenAPI export"
         )
-    if getattr(a, "browser", None):
+    attached = getattr(a, "cdp_endpoint", None)
+    if attached:
+        from .browser import validate_cdp_endpoint
+
+        validate_cdp_endpoint(attached)
+        if not hp.local or a.no_auth or a.cookies_file or a.browser or a.openapi:
+            raise SafetyRefusalError(
+                "--cdp-endpoint reuses a local browser's own session; it requires local "
+                "capture and cannot combine with --no-auth, --cookies-file, --browser, "
+                "or HAR/OpenAPI export"
+            )
+        if getattr(a, "browser_concurrency", 1) != 1:
+            raise ConfigurationError("an attached browser supports one capture shard")
+    if getattr(a, "browser", None) or attached:
         # Bound an authenticated import even when general capture defaults are larger.
         a.max_total_requests = min(a.max_total_requests, 100)
         a.max_origin_requests = min(a.max_origin_requests, 100)
         a.max_operation_requests = min(a.max_operation_requests, 20)
         a.browser_concurrency = 1
         a.no_burp = True  # No TLS interception of native credentials.
-        import resource
+        if getattr(a, "browser", None):
+            import resource
 
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     final_out = os.path.abspath(a.out or f"./astrolabe-{dom}")
     os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
     out = tempfile.mkdtemp(prefix=".astrolabe-stage-", dir=os.path.dirname(final_out) or ".")
@@ -703,7 +819,7 @@ def cmd_map(a):
         f"{rdir}/cookies.json" if getattr(a, "browser", None) else os.path.join(out, "cookies.json")
     )
     _track_local_secret(cookies_local)
-    if not a.no_auth:
+    if not a.no_auth and not attached:
         if not a.cookies_file and not getattr(a, "browser", None):
             raise ConfigurationError(
                 "--cookies-file or --browser is required for an authenticated map (or pass --no-auth)"
@@ -718,7 +834,7 @@ def cmd_map(a):
             cks = export_cookies(a.browser, dom, a.profile)
             print(f"[cookies] {len(cks)} domain-scoped cookies from {a.browser}")
         else:
-            cks = browser_cookies(json.load(open(os.path.expanduser(a.cookies_file))))
+            cks = browser_cookies(normalize_cookies(json.load(open(os.path.expanduser(a.cookies_file)))))
             print(f"[cookies] {len(cks)} cookies from file")
         atomic_write_json(cookies_local, cks, mode=0o600)
 
@@ -744,7 +860,7 @@ def cmd_map(a):
             recipe_argv += ["--trusted-recipe"]
             if getattr(a, "allow_inprocess_python_recipe", False):
                 recipe_argv += ["--allow-inprocess-python-recipe"]
-    if not a.no_auth:
+    if not a.no_auth and not attached:
         if not getattr(a, "browser", None):
             put(hp, cookies_local, f"{rdir}/cookies.json")
         ssh_argv(hp, ["chmod", "600", f"{rdir}/cookies.json"], timeout=15)
@@ -762,10 +878,16 @@ def cmd_map(a):
         "--run-id",
         run_id,
         *recipe_argv,
-        *([] if getattr(a, "browser", None) else ["--har"]),
+        *([] if getattr(a, "browser", None) or attached else ["--har"]),
         "--introspect",
     ]
-    if not a.no_auth:
+    if getattr(a, "user_agent", None):
+        if attached:
+            raise ConfigurationError("--user-agent cannot combine with --cdp-endpoint")
+        cap += ["--user-agent", a.user_agent]
+    if attached:
+        cap += ["--cdp-endpoint", attached]
+    elif not a.no_auth:
         cap += ["--cookies", f"{rdir}/cookies.json"]
     if proxy:
         cap += ["--proxy", proxy]
@@ -793,13 +915,29 @@ def cmd_map(a):
     print(f"[capture] running on {hp.host} …")
     r = run_capture_argv(hp, cap, a.timeout, cwd=rdir)
     print(r.stdout[-2000:] if r.stdout else "")
-    _require_success(r, "capture")
 
-    # 4. pull PII-safe artifacts only. NOT cookies, NOT auth.headers.json, and NOT
-    #    capture.har — the full HAR holds response bodies (PII) + Bearer tokens in
-    #    request headers, so it stays on the host tmpfs and is processed there (step 6).
-    for f in ("capture.jsonl", "meta.json", "graphql-names.txt", "transfer-manifest.json"):
+    # 4. pull artifacts before the success check so a partial run still
+    #    preserves whatever the host managed to write.
+    safe_artifacts = ("capture.jsonl", "meta.json", "graphql-names.txt", "transfer-manifest.json")
+    sensitive_required = ("capture.har", "cookies.json")
+    sensitive_optional = ("auth.headers.json",)
+    if retain_raw():
+        print(
+            "\n!!! astrolabe capture fidelity = raw !!!\n"
+            f"    pulling sensitive artifacts: {', '.join(sensitive_required + sensitive_optional)}\n"
+            "    the chart dir is now a credential artifact.\n",
+            file=sys.stderr,
+        )
+        for f in sensitive_required:
+            get(hp, f"{rdir}/{f}", os.path.join(out, f))
+        for f in sensitive_optional:
+            got = get(hp, f"{rdir}/{f}", os.path.join(out, f), required=False)
+            if got is None:
+                print(f"[raw-mode] {f} not present on host — skipped (best-effort)", file=sys.stderr)
+    for f in safe_artifacts:
         get(hp, f"{rdir}/{f}", os.path.join(out, f))
+
+    _require_success(r, "capture")
 
     _verify_transfer_manifest(out, run_id)
 
@@ -811,7 +949,18 @@ def cmd_map(a):
     if meta.get("run_id") != run_id:
         raise PartialCaptureError("capture metadata run ID does not match the requested run")
     if meta.get("partial"):
-        raise PartialCaptureError("capture host marked the run partial")
+        # in developer mode, a partial capture is treated as a warning not a
+        # failure: the HAR arrived (otherwise the env-var-gated pull above
+        # would have raised), and the operator explicitly asked for body
+        # retention. Run analyze with whatever made it through.
+        if retain_raw() and os.path.isfile(os.path.join(out, "capture.har")):
+            print(
+                "[raw-mode] capture host marked run partial — proceeding with analyze "
+                "because capture.har landed and raw fidelity is on",
+                file=sys.stderr,
+            )
+        else:
+            raise PartialCaptureError("capture host marked the run partial")
     if normalize_host(str(meta.get("base_domain") or "")) != dom:
         raise PartialCaptureError("capture metadata target does not match the requested domain")
     intro = (meta.get("events", {}) or {}).get("introspection") or {}
@@ -884,71 +1033,21 @@ def cmd_map(a):
         _require_success(orr, "OpenAPI generation")
         get(hp, f"{rdir}/openapi.json", os.path.join(out, "openapi.json"))
 
-    # 7. analyze -> map.md + endpoints.json
-    recs, meta = az.load(out)
-    prior_graph = os.path.join(final_out, "graph.json")
-    nops, nrest = az.render(
-        out,
-        recs,
-        meta,
-        prior_graph=prior_graph if os.path.exists(prior_graph) else None,
-    )
-    print(f"[analyze] {nops} gql ops, {nrest} rest -> {out}/map.md")
-
-    # 7b. durable typed contract (observed proof) — merges the prior contract in this
-    #     out dir so the map completes across runs and drift is surfaced. The contract,
-    #     not the map, is the artifact downstream active tooling depends on.
-    prior = _prior_contract(a, dom) or os.path.join(final_out, "contract.json")
-    import sys as _s
-
-    _s.argv = ["contract", out] + (["--merge", str(prior)] if os.path.exists(prior) else [])
-    ct.main()
-    _publish_contract(a, dom, os.path.join(out, "contract.json"))
-
-    # 8. cleanup — remote tmpfs (cookies + auth headers + captures) AND local cookies
+    # 7. cleanup — remote tmpfs (cookies + auth headers + captures) AND local cookies
     ssh_argv(hp, ["rm", "-rf", "--", rdir], timeout=20)
     _remove_local_secret(cookies_local)
     print(f"[cleanup] removed {hp.host}:{rdir} + local cookies")
-    required = (
-        "capture.jsonl",
-        "meta.json",
-        "graphql-names.txt",
-        "transfer-manifest.json",
-        "graph.json",
-        "map.md",
-        "endpoints.json",
-        "contract.json",
-        "contract.md",
-    )
-    missing = [name for name in required if not os.path.isfile(os.path.join(out, name))]
-    if missing:
-        raise PartialCaptureError(
-            f"run is partial; required staged artifacts missing: {', '.join(missing)}"
-        )
-    promoted = list(required) + [
-        name for name in ("schema.json", "openapi.json") if os.path.isfile(os.path.join(out, name))
-    ]
-    from .artifact import build_manifest, utc_now, write_manifest
 
-    meta = json.load(open(os.path.join(out, "meta.json")))
-    now = utc_now()
-    manifest = build_manifest(
+    # 8. analyze -> map.md + endpoints.json -> durable typed contract -> artifact manifest
+    promoted = _analyze_contract_and_seal(
         out,
+        final_out,
+        dom,
+        a,
+        run_id=run_id,
         artifact_type="capture-pipeline",
-        artifact_schema_version=1,
-        run_id=str(meta.get("run_id") or run_id),
-        target=dom,
-        completeness="complete",
-        started_at=str(meta.get("started_at") or meta.get("captured_at") or now),
-        completed_at=str(meta.get("completed_at") or meta.get("captured_at") or now),
-        artifact_names=promoted,
-        profile=getattr(a, "profile", None),
-        failures=list(meta.get("failures") or []),
-        truncations=dict(meta.get("truncations") or {}),
-        safety_mode="read-only",
+        extra_artifact_names=("schema.json", "openapi.json"),
     )
-    write_manifest(os.path.join(out, "artifact-manifest.json"), manifest)
-    promoted.append("artifact-manifest.json")
     _promote_staging_directory(out, final_out)
     print(
         f"\n✓ {final_out}/contract.md (contract of record) | map.md | endpoints.json"
@@ -982,7 +1081,7 @@ def cmd_replay(a):
     _track_local_secret(cookies_local)
     atomic_write_json(
         cookies_local,
-        json.load(open(os.path.expanduser(a.cookies_file))),
+        normalize_cookies(json.load(open(os.path.expanduser(a.cookies_file)))),
         mode=0o600,
     )
 
@@ -1046,6 +1145,7 @@ def cmd_mcpgen(a):
         + (["--overrides", a.overrides] if a.overrides else [])
         + (["--noise-pattern", a.noise_pattern] if a.noise_pattern else [])
         + (["--read-pattern", a.read_pattern] if a.read_pattern else [])
+        + (["--require-active-proof"] if a.require_active_proof else [])
     )
     mg.main()
 
@@ -1062,6 +1162,42 @@ def cmd_import_openapi(a):
         + [value for spec in a.external_ref for value in ("--external-ref", spec)]
     )
     oi.main()
+
+
+@_guaranteed_cleanup
+def cmd_import_har(a):
+    """Convert traffic recorded elsewhere (Chrome DevTools "Save all as HAR", or
+    any HAR-emitting tool) into an astrolabe capture dir, then run the same
+    analyze -> contract -> artifact-manifest tail `astrolabe map` runs after a
+    live capture, so the imported evidence is chartable by mcp-gen exactly like
+    astrolabe's own captures. Fully local: no pipeline host, no browser, no
+    network egress -- the HAR is already on disk.
+    """
+    from . import har_import as hi
+
+    dom = normalize_host(a.domain)
+    final_out = os.path.abspath(a.out or f"./astrolabe-{dom}")
+    os.makedirs(os.path.dirname(final_out) or ".", exist_ok=True)
+    out = tempfile.mkdtemp(prefix=".astrolabe-stage-", dir=os.path.dirname(final_out) or ".")
+    _track_staging_dir(out, preserve_as=f"{final_out}.partial")
+
+    summary = hi.import_har(a.har_file, dom, out)
+    print(
+        f"[import-har] {summary['entries_kept']}/{summary['entries_total']} entries kept "
+        f"({summary['failures']} failure(s)) -> {out}/capture.jsonl"
+    )
+
+    promoted = _analyze_contract_and_seal(
+        out,
+        final_out,
+        dom,
+        a,
+        run_id=summary["run_id"],
+        artifact_type="har-import",
+    )
+    _promote_staging_directory(out, final_out)
+    print(f"\n✓ {final_out}/contract.md (contract of record) | map.md | endpoints.json")
+    return {"out": final_out, "artifacts": promoted, **summary}
 
 
 @_guaranteed_cleanup
@@ -1189,8 +1325,12 @@ def cmd_contract(a):
             import resource
 
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        elif not a.cookies_file:
-            raise ConfigurationError("--cookies-file or --browser is required for --execute")
+        elif not a.cookies_file and not a.no_auth:
+            raise ConfigurationError(
+                "--cookies-file, --browser, or --no-auth is required for --execute"
+            )
+        if a.no_auth and (a.cookies_file or getattr(a, "browser", None)):
+            raise ConfigurationError("--no-auth cannot combine with --cookies-file or --browser")
         dom = normalize_host(
             a.domain or json.load(open(os.path.join(cap, "endpoints.json")))["base_domain"]
         )
@@ -1203,10 +1343,12 @@ def cmd_contract(a):
             cks = export_cookies(a.browser, dom, a.profile)
             print(f"[cookies] {len(cks)} domain-scoped cookies from {a.browser}")
             atomic_write_json(cookies_local, cks, mode=0o600)
+        elif a.no_auth:
+            pass
         else:
             atomic_write_json(
                 cookies_local,
-                json.load(open(os.path.expanduser(a.cookies_file))),
+                normalize_cookies(json.load(open(os.path.expanduser(a.cookies_file)))),
                 mode=0o600,
             )
         rdir = f"/dev/shm/astrolabe-contract-{_target_slug(dom)}-{_new_run_id()}"
@@ -1214,7 +1356,8 @@ def cmd_contract(a):
         ssh_argv(hp, ["mkdir", "-m", "700", "-p", rdir], timeout=20)
         for helper in CONTRACT_HELPERS:
             put(hp, os.path.join(HERE, helper), f"{rdir}/{helper}")
-        put(hp, cookies_local, f"{rdir}/cookies.json")
+        if not a.no_auth:
+            put(hp, cookies_local, f"{rdir}/cookies.json")
         validation_contract = os.path.join(cap, "_validation-contract.json")
         _register_cleanup(
             lambda: os.path.exists(validation_contract) and os.unlink(validation_contract)
@@ -1246,10 +1389,10 @@ def cmd_contract(a):
                 if getattr(a, "allow_inprocess_python_recipe", False):
                     rec.append("--allow-inprocess-python-recipe")
         cmd = [
-            hp.cloak_py,
+            # Same interpreter rule as map: the local backend runs in this CLI's venv.
+            sys.executable if hp.local else hp.cloak_py,
             "contract_verify.py",
-            "--cookies",
-            f"{rdir}/cookies.json",
+            *([] if a.no_auth else ["--cookies", f"{rdir}/cookies.json"]),
             "--outdir",
             rdir,
             "--base-domain",
@@ -1258,6 +1401,7 @@ def cmd_contract(a):
             "/graphql",
             "--contract",
             f"{rdir}/contract.json",
+            *(["--urls", a.seeds] if a.seeds else []),
             *rec,
         ]
         for operation_id in a.allow_mutation:
@@ -1295,6 +1439,37 @@ def cmd_contract(a):
     _s.argv = argv
     ct.main()
     _publish_contract(a, domain, os.path.join(cap, "contract.json"))
+
+
+def cmd_challenge(a):
+    """Solve one challenge with Byparr and stage its cookies as a private cookie file.
+
+    Only names and the solving user agent are reported; cookie values stay in the file.
+    """
+    from . import capture as cap
+
+    hp = _resolve(a)
+    if not hp.local:
+        raise SafetyRefusalError("challenge solving writes local credentials; use --local")
+    url = validate_url(a.url, {normalize_host(a.domain)}, schemes=("https",), resolve=True)
+    if not 10 <= a.timeout <= 180:
+        raise ConfigurationError("challenge timeout must be between 10 and 180 seconds")
+    try:
+        result = cap.byparr_solve(hp.byparr, url, timeout_s=a.timeout)
+    except OSError as exc:
+        raise CommandExecutionError(f"byparr is unreachable at {hp.byparr}: {exc}") from exc
+    solution = result.get("solution") or {}
+    cookies = cap.challenge_cookies(solution, normalize_host(a.domain))
+    if not cookies:
+        raise PartialCaptureError("byparr returned no cookies for the target domain")
+    out = os.path.abspath(a.out)
+    atomic_write_json(out, cookies, mode=0o600)
+    return {
+        "cookies_file": out,
+        "cookie_names": sorted({cookie["name"] for cookie in cookies}),
+        "status": solution.get("status"),
+        "user_agent": solution.get("userAgent") or None,
+    }
 
 
 def cmd_recipe(a):
@@ -1442,6 +1617,15 @@ def build_parser():
     )
     m.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
     m.add_argument(
+        "--user-agent",
+        help="capture user agent; use the agent returned by `challenge` with its cookies",
+    )
+    m.add_argument(
+        "--cdp-endpoint",
+        help="attach to a running local Chromium (http://127.0.0.1:PORT, started with "
+        "--remote-debugging-port) and capture with its existing session",
+    )
+    m.add_argument(
         "--contract-store",
         help="directory holding the per-domain contract of record "
         "(default: .astrolabe/contracts, or ASTROLABE_CONTRACT_STORE)",
@@ -1540,6 +1724,11 @@ def build_parser():
         "--read-pattern",
         help="regex of REST paths to force-classify as reads (e.g. a POST-based search)",
     )
+    g.add_argument(
+        "--require-active-proof",
+        action="store_true",
+        help="expose only operations astrolabe re-executed successfully",
+    )
     g.set_defaults(func=cmd_mcpgen)
 
     io_p = sub.add_parser(
@@ -1558,6 +1747,26 @@ def build_parser():
         help="authorize one exact external $ref URI using a bounded local document",
     )
     io_p.set_defaults(func=cmd_import_openapi)
+
+    ih_p = sub.add_parser(
+        "import-har",
+        parents=[machine],
+        help="convert a HAR capture into chartable evidence (analyze + contract, no live capture)",
+    )
+    ih_p.add_argument("har_file", help="path to a HAR 1.2 JSON file")
+    ih_p.add_argument("--domain", required=True, help="first-party host to keep traffic for")
+    ih_p.add_argument("--out", help="output dir (default ./astrolabe-<domain>)")
+    ih_p.add_argument(
+        "--contract-store",
+        help="directory holding the per-domain contract of record "
+        "(default: .astrolabe/contracts, or ASTROLABE_CONTRACT_STORE)",
+    )
+    ih_p.add_argument(
+        "--no-contract-store",
+        action="store_true",
+        help="keep this run's contract to itself instead of accumulating per domain",
+    )
+    ih_p.set_defaults(func=cmd_import_har)
 
     sc = sub.add_parser(
         "scan", parents=[machine], help="deterministic source-scan → recipe scaffold"
@@ -1627,6 +1836,7 @@ def build_parser():
         "--domain", help="target domain for --execute (default: capture's base_domain)"
     )
     ct_p.add_argument("--recipe", help="recipe to warm surfaces for --execute")
+    ct_p.add_argument("--seeds", default="", help="comma-separated warm-up URLs for --execute")
     ct_p.add_argument(
         "--trusted-recipe",
         action="store_true",
@@ -1668,8 +1878,24 @@ def build_parser():
         help="explicitly import this domain's cookies from a local Linux browser (with --execute)",
     )
     ct_p.add_argument("--profile", default="Default", help="browser profile name (with --browser)")
+    ct_p.add_argument(
+        "--no-auth", action="store_true", help="verify a public site anonymously (with --execute)"
+    )
     ct_p.add_argument("--timeout", type=int, default=400)
     ct_p.set_defaults(func=cmd_contract)
+
+    ch = sub.add_parser(
+        "challenge",
+        parents=[machine],
+        help="solve an anti-bot challenge with Byparr into a private cookie file",
+    )
+    ch.add_argument("url")
+    ch.add_argument("--domain", required=True, help="target domain the cookies must belong to")
+    ch.add_argument("--out", required=True, help="Playwright cookie JSON to write (mode 0600)")
+    ch.add_argument("--timeout", type=int, default=60, help="solve timeout in seconds")
+    ch.add_argument("--local", action="store_true", default=None)
+    ch.add_argument("--host", default=None)
+    ch.set_defaults(func=cmd_challenge)
 
     rp = sub.add_parser(
         "recipe", parents=[machine], help="lint a per-site recipe .py (SURFACES + drive())"
@@ -1752,16 +1978,14 @@ def main(argv=None):
         if progress is not None:
             if progress.getvalue():
                 print(progress.getvalue(), end="", file=sys.stderr)
-            print(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "command": a.cmd,
-                        "result": result if result is not None else {},
-                    },
-                    sort_keys=True,
-                )
-            )
+            # "result" is present only when the command actually returned something.
+            # Synthesising {} for a command that returns None made every such command
+            # (mcp-gen, map, scan, contract) look like it had produced an empty payload,
+            # and a caller could not tell the two apart.
+            envelope = {"ok": True, "command": a.cmd}
+            if result is not None:
+                envelope["result"] = result
+            print(json.dumps(envelope, sort_keys=True))
     except CLIError as exc:
         _emit_cli_failure(
             machine=a.json,

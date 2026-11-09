@@ -71,9 +71,10 @@ class _FakeCookieJar:
 
 
 class _FakeResponse:
-    def __init__(self, status_code=200, json_data=None):
+    def __init__(self, status_code=200, json_data=None, headers=None):
         self.status_code = status_code
         self._json_data = json_data
+        self.headers = headers
 
     def json(self):
         if self._json_data is None:
@@ -341,3 +342,101 @@ def test_vary_sweeps_variable_across_calls(monkeypatch, tmp_path, fake_session):
     _run_replay(monkeypatch, tmp_path, op, auth_map, extra_argv=["--vary", "filter.page=1,2,3"])
     bodies = [json.loads(c["data"]) for c in _FakeSession.instances[0].post_calls]
     assert [b["variables"]["filter"]["page"] for b in bodies] == ["1", "2", "3"]
+
+
+# ---- retry policy -------------------------------------------------------
+
+
+class _StatusSession:
+    def __init__(self, statuses):
+        self.statuses = list(statuses)
+        self.post_calls = []
+        self.cookies = _FakeCookieJar()
+
+    def post(self, url, headers=None, data=None, timeout=None):
+        self.post_calls.append({"url": url, "headers": headers, "data": data})
+        status = self.statuses.pop(0) if self.statuses else 200
+        headers = {"retry-after": "3"} if status == 429 else None
+        return _FakeResponse(status, {"data": {"ok": True}}, headers)
+
+
+def _install(monkeypatch, statuses):
+    session = _StatusSession(statuses)
+    monkeypatch.setattr(replay.requests, "Session", lambda impersonate=None: session)
+    monkeypatch.setattr(replay.time, "sleep", lambda seconds: None)
+    return session
+
+
+def _op():
+    return {"alias": "someOp", "endpoint": "https://example.com/api/graphql", "query": "q"}
+
+
+def test_rate_limited_origin_is_retried_rather_than_recorded_as_a_failed_sample(
+    monkeypatch, tmp_path, fake_session
+):
+    session = _install(monkeypatch, [429, 200])
+    out = _run_replay(
+        monkeypatch,
+        tmp_path,
+        _op(),
+        {"someOp": {"authorization": "Bearer abc"}},
+    )
+    assert out["ok"] == 1
+    assert len(session.post_calls) == 2
+    assert out["results"][0]["status"] == 200
+    assert out["results"][0]["attempts"] == 2
+
+
+def test_permanent_verdict_is_not_retried(monkeypatch, tmp_path, fake_session):
+    session = _install(monkeypatch, [403, 200])
+    out = _run_replay(
+        monkeypatch,
+        tmp_path,
+        _op(),
+        {"someOp": {"authorization": "Bearer abc"}},
+    )
+    assert len(session.post_calls) == 1
+    assert out["results"][0]["status"] == 403
+    assert out["results"][0]["attempts"] == 1
+
+
+def test_retry_budget_is_bounded_and_the_last_status_is_reported(
+    monkeypatch, tmp_path, fake_session
+):
+    session = _install(monkeypatch, [429, 429, 429, 200])
+    out = _run_replay(
+        monkeypatch,
+        tmp_path,
+        _op(),
+        {"someOp": {"authorization": "Bearer abc"}},
+        extra_argv=["--retries", "2"],
+    )
+    assert len(session.post_calls) == 3
+    assert out["results"][0]["status"] == 429
+    assert out["results"][0]["attempts"] == 3
+
+
+def test_retries_zero_makes_exactly_one_attempt(monkeypatch, tmp_path, fake_session):
+    session = _install(monkeypatch, [429, 200])
+    _run_replay(
+        monkeypatch,
+        tmp_path,
+        _op(),
+        {"someOp": {"authorization": "Bearer abc"}},
+        extra_argv=["--retries", "0"],
+    )
+    assert len(session.post_calls) == 1
+
+
+def test_replay_waits_the_origins_retry_after(monkeypatch, tmp_path, fake_session):
+    session = _StatusSession([429, 200])
+    monkeypatch.setattr(replay.requests, "Session", lambda impersonate=None: session)
+    slept = []
+    monkeypatch.setattr(replay.time, "sleep", lambda seconds: slept.append(seconds))
+    _run_replay(
+        monkeypatch,
+        tmp_path,
+        _op(),
+        {"someOp": {"authorization": "Bearer abc"}},
+    )
+    assert slept == [3.0]

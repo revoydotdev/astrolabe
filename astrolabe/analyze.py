@@ -7,7 +7,12 @@ machine-readable inventory. Records shapes only — no PII.
 """
 
 from __future__ import annotations
-import argparse, json, os, re, collections, urllib.parse as up
+import argparse
+import json
+import os
+import re
+import collections
+import urllib.parse as up
 
 from .gqlvars import merge_declared_with_observed, parse_variable_definitions
 from .shapemerge import merge_shapes
@@ -85,7 +90,7 @@ def load(outdir):
     recs = []
     p = os.path.join(outdir, "capture.jsonl")
     if os.path.exists(p):
-        recs = [json.loads(l) for l in open(p)]
+        recs = [json.loads(line) for line in open(p)]
     meta = {}
     mp = os.path.join(outdir, "meta.json")
     if os.path.exists(mp):
@@ -148,8 +153,17 @@ def path_tmpl(url):
     templates — changing this function's substitution rules would silently
     break that join. See PathTemplater for the evidence-based replacement
     used by build() to key the REST inventory.
+
+    The substitution rules themselves live in `_template_path_segment()` so a
+    caller that already parsed the path does not parse it again; the rules are
+    unchanged, and `path_tmpl(url)` is still exactly `_template_path_segment` of
+    `urlparse(url).path`.
     """
-    p = up.urlparse(url).path
+    return _template_path_segment(up.urlparse(url).path)
+
+
+def _template_path_segment(p):
+    """path_tmpl()'s substitution rules, applied to an already-parsed path."""
     p = re.sub(r"/\d{3,}", "/{id}", p)
     p = re.sub(r"/[0-9a-f]{24,}", "/{hash}", p)
     p = re.sub(r"~[0-9a-z]+", "~{uid}", p)
@@ -209,8 +223,9 @@ def path_tmpl(url):
 # `/user/settings` observed once each (D=2, N=2) is thin evidence (N <
 # MIN_SAMPLES) and falls back to the lexical guess per segment instead, but
 # the same fork observed 3-4 times apiece could cross PARAM_UNIQUE_RATIO. This
-# is an accepted tradeoff of cardinality-only clustering (no semantic
-# awareness of "is this a resource name or a value"), not fixed here.
+# was an accepted tradeoff of cardinality-only clustering; response-shape
+# evidence (see _distinct_endpoints below) now vetoes the merge whenever the
+# siblings' observed responses differ.
 
 MIN_SAMPLES = 4  # fewer total requests through a trie position than
 # this is thin evidence; fall back to the lexical
@@ -238,12 +253,84 @@ def _param_name_for_values(values):
     return "slug"
 
 
+# ponytail: _UNRESOLVED marks a node whose parameter decision has not been
+# computed yet. The decision is a pure function of `counts`/`shapes`, both of
+# which are written only by PathTemplater.__init__ and read only by _param() --
+# so caching it is exactly equivalent to recomputing it, and it turns the
+# per-record shape scan into one scan per node. Nothing is capped, sampled or
+# approximated: the boundary stays exact, so this cannot move which segments get
+# templated and therefore cannot move a REST tool name.
+_UNRESOLVED = object()
+
+
 class _TrieNode:
-    __slots__ = ("children", "counts")
+    __slots__ = ("children", "counts", "shapes", "param")
 
     def __init__(self):
         self.children: dict[str, _TrieNode] = {}
         self.counts: dict[str, int] = {}  # next-segment value -> occurrence count
+        self.shapes: dict[str, set[str]] = {}  # next-segment value -> response key paths
+        self.param = _UNRESOLVED  # memoized `{...}` segment for this position, or None
+
+    def _param(self):
+        """The `{id}`-style segment for this position, or None to keep the
+        segment literal. Computed once per node; see _UNRESOLVED above."""
+        cached = self.param
+        if cached is not _UNRESOLVED:
+            return cached
+        counts = self.counts
+        n = sum(counts.values())
+        d = len(counts)
+        if (
+            d >= 2
+            and n >= MIN_SAMPLES
+            and (d / n) >= PARAM_UNIQUE_RATIO
+            and not _distinct_endpoints(self.shapes)
+        ):
+            cached = "{" + _param_name_for_values(counts.keys()) + "}"
+        else:
+            cached = None
+        self.param = cached
+        return cached
+
+
+# Cardinality alone cannot tell `/api/public/{id}` from a handful of RPC-style
+# siblings (`/api/public/search`, `/api/public/getVersion`, `/api/public/terms`)
+# that each saw light traffic. Responses can: members of one id space return the
+# same resource shape, while distinct endpoints return different ones. Two values
+# at a candidate position are treated as different endpoints when their response
+# key paths overlap weakly, or when each carries several paths the other lacks
+# (which survives a shared response envelope around different payloads).
+SHAPE_OVERLAP_FLOOR = 0.5
+SHAPE_DISTINCT_PATHS = 3
+
+
+def _shape_paths(shape, prefix="", depth=0):
+    paths: set[str] = set()
+    if depth > 8:
+        return paths
+    if isinstance(shape, dict):
+        for key, value in shape.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            paths.add(path)
+            paths |= _shape_paths(value, path, depth + 1)
+    elif isinstance(shape, list):
+        for item in shape:
+            paths |= _shape_paths(item, f"{prefix}[]", depth + 1)
+    return paths
+
+
+def _distinct_endpoints(shapes_by_value):
+    shaped = list({frozenset(paths) for paths in shapes_by_value.values() if paths})
+    for index, left in enumerate(shaped):
+        for right in shaped[index + 1 :]:
+            overlap = len(left & right) / len(left | right)
+            if overlap < SHAPE_OVERLAP_FLOOR or (
+                len(left - right) >= SHAPE_DISTINCT_PATHS
+                and len(right - left) >= SHAPE_DISTINCT_PATHS
+            ):
+                return True
+    return False
 
 
 class PathTemplater:
@@ -254,29 +341,30 @@ class PathTemplater:
     path_tmpl()'s single-URL pure function.
     """
 
-    def __init__(self, urls):
+    def __init__(self, urls, shapes=None):
+        """`shapes`, when given, aligns with `urls`: each record's resp_shape or None."""
         self._root = _TrieNode()
-        for u in urls:
+        for index, u in enumerate(urls):
             segs = up.urlparse(u).path.split("/")
+            paths = _shape_paths(shapes[index]) if shapes and shapes[index] else set()
             node = self._root
             for s in segs:
                 node.counts[s] = node.counts.get(s, 0) + 1
+                if paths:
+                    node.shapes.setdefault(s, set()).update(paths)
                 node = node.children.setdefault(s, _TrieNode())
 
     def apply(self, url):
-        path = up.urlparse(url).path
+        return self.apply_path(up.urlparse(url).path)
+
+    def apply_path(self, path):
         raw = path.split("/")
-        baseline = path_tmpl(url).split("/")
+        baseline = _template_path_segment(path).split("/")
         out = []
         node: _TrieNode | None = self._root
         for i, s in enumerate(raw):
-            counts = node.counts if node is not None else {}
-            n = sum(counts.values())
-            d = len(counts)
-            if d >= 2 and n >= MIN_SAMPLES and (d / n) >= PARAM_UNIQUE_RATIO:
-                out.append("{" + _param_name_for_values(counts.keys()) + "}")
-            else:
-                out.append(baseline[i] if i < len(baseline) else s)
+            param = node._param() if node is not None else None
+            out.append(param if param is not None else (baseline[i] if i < len(baseline) else s))
             node = node.children.get(s) if node is not None else None
         return "/".join(out)
 
@@ -304,7 +392,6 @@ def merge_observed_variables(shapes):
 
 
 def build(recs, meta):
-    base = meta.get("base_domain", "")
     gql_paths = set(meta.get("graphql_endpoints", {}).keys())
 
     ops = {}
@@ -318,6 +405,9 @@ def build(recs, meta):
                 continue
             oid = op_id(r, o)
             kind = o.get("semantic_kind") or semantic_kind(o.get("query")).value
+            # GET cannot carry a mutation; upgrade persisted queries sent via GET.
+            if kind == "unknown" and r.get("method") in {"GET", "HEAD", "OPTIONS"}:
+                kind = "query"
             protocol = (
                 o.get("protocol")
                 or graphql_protocol(
@@ -341,6 +431,7 @@ def build(recs, meta):
                     "status": set(),
                     "input_shape": None,
                     "input_shapes": [],
+                    "input_depth": 0,  # _depth_keys of input_shape, so it is not recomputed
                     "query": "",
                     "http_method": r.get("method"),
                     "request_media_type": r.get("request_media_type"),
@@ -368,11 +459,18 @@ def build(recs, meta):
             if isinstance(vs, dict):
                 d["input_shapes"].append(vs)
             # keep the richest input shape seen (most nested keys)
-            if isinstance(vs, dict) and _depth_keys(vs) > _depth_keys(d["input_shape"]):
+            if isinstance(vs, dict) and _depth_keys(vs) > d["input_depth"]:
                 d["input_shape"] = vs
+                d["input_depth"] = _depth_keys(vs)
             rs = r.get("resp_shape")
             if isinstance(rs, dict) and isinstance(rs.get("data"), dict):
                 d["returns"].update(rs["data"].keys())
+            # retain the full response shape so the contract and toolpack can
+            # surface values. value-retention happens earlier in structural_shape();
+            # at the default `values` fidelity primitives are kept with credentials
+            # masked, `shape` collapses them to type names, `raw` keeps them verbatim.
+            if isinstance(rs, dict):
+                d["response_shape"] = rs
 
     def eligible_rest(record):
         kind = (
@@ -384,18 +482,23 @@ def build(recs, meta):
             MediaKind.JAVASCRIPT.value,
         }
 
-    rest_urls = [
-        r["url"]
-        for r in recs
-        if "graphql" not in r and up.urlparse(r["url"]).path not in gql_paths and eligible_rest(r)
-    ]
-    templater = PathTemplater(rest_urls)
+    # One pass, one parse: the filter below and the loop that follows used to test
+    # the same negated predicate over the same records, so each URL was parsed
+    # twice. Keeping the path alongside the record hands it to the templater too.
+    rest_records = []
+    for r in recs:
+        if "graphql" in r or not eligible_rest(r):
+            continue
+        path = up.urlparse(r["url"]).path
+        if path not in gql_paths:
+            rest_records.append((r, path))
+    templater = PathTemplater(
+        [r["url"] for r, _ in rest_records], [r.get("resp_shape") for r, _ in rest_records]
+    )
 
     rest = collections.OrderedDict()
-    for r in recs:
-        if "graphql" in r or up.urlparse(r["url"]).path in gql_paths or not eligible_rest(r):
-            continue
-        key = (r["method"], templater.apply(r["url"]))
+    for r, path in rest_records:
+        key = (r["method"], templater.apply_path(path))
         e = rest.setdefault(
             key,
             {"n": 0, "hdr": {}, "status": set(), "response_kinds": set(), "media_types": set()},
@@ -568,6 +671,7 @@ def render(outdir, recs, meta, *, prior_graph=None):
                 "returns": sorted(v["returns"]),
                 "input_shape": v["input_shape"],
                 "input_schema": input_schema(v),
+                "response_shape": v.get("response_shape"),
                 "persistedHash": v["hash"],
                 "calls": v["count"],
             }
@@ -741,7 +845,7 @@ def render(outdir, recs, meta, *, prior_graph=None):
     L = []
     W = L.append
     W(f"# {base} — API / GraphQL map\n")
-    W(f"_Generated by astrolabe. Surface only (no response values / token values persisted)._\n")
+    W("_Generated by astrolabe. Surface only (no response values / token values persisted)._\n")
     W("## Summary\n")
     W(f"- First-party API calls captured: **{len(recs)}**")
     W(
@@ -761,7 +865,7 @@ def render(outdir, recs, meta, *, prior_graph=None):
         W(
             f"- GraphQL introspection: **{'ENABLED' if intro.get('enabled') else 'disabled'}**"
             + (f" ({intro.get('types')} types)" if intro.get("enabled") else "")
-            + (f" — schema recovered → `schema.json`" if os.path.exists(schema_path) else "")
+            + (" — schema recovered → `schema.json`" if os.path.exists(schema_path) else "")
         )
     if os.path.exists(schema_path):
         try:

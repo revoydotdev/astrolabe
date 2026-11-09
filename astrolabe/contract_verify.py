@@ -8,7 +8,13 @@ for `astrolabe contract --active`. Runs in the cloakbrowser venv on the capture 
 """
 
 from __future__ import annotations
-import argparse, datetime, json, importlib.util, os, urllib.parse as up
+import argparse
+import datetime
+import json
+import importlib.util
+import os
+import re
+import urllib.parse as up
 
 try:
     from astrolabe.browser import launch_context
@@ -47,6 +53,40 @@ FORBIDDEN = {
 }
 
 
+REST_READ_METHODS = frozenset({"GET", "HEAD"})
+_PATH_PARAMETER = re.compile(r"\\\{[^/]+?\\\}")
+
+
+def rest_read_matchers(contract):
+    """(method, compiled path pattern, op key) for each contract REST op typed a read.
+
+    The contract is the source of truth for both the templated key and the read
+    classification, so the verifier never re-derives either independently.
+    """
+    matchers = []
+    for key, operation in (contract.get("operations") or {}).items():
+        method = str(operation.get("method") or "").upper()
+        if (
+            operation.get("transport") != "rest"
+            or operation.get("type") != "query"
+            or method not in REST_READ_METHODS
+        ):
+            continue
+        pattern = _PATH_PARAMETER.sub("[^/]+", re.escape(str(operation.get("path") or "/")))
+        matchers.append((method, re.compile(pattern + "/?"), key))
+    # Literal paths outrank templates when both match the same URL.
+    matchers.sort(key=lambda item: item[1].pattern.count("[^/]+"))
+    return matchers
+
+
+def rest_op_key(matchers, method, url):
+    path = up.urlparse(url).path or "/"
+    for candidate_method, pattern, key in matchers:
+        if candidate_method == method.upper() and pattern.fullmatch(path):
+            return key
+    return None
+
+
 def op_key(url):
     qs = dict(up.parse_qsl(up.urlparse(url).query))
     if qs.get("alias"):
@@ -56,7 +96,7 @@ def op_key(url):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cookies", required=True)
+    ap.add_argument("--cookies", help="Playwright cookie JSON; omit to verify anonymously")
     ap.add_argument("--outdir", default=".")
     ap.add_argument("--gql-marker", default="/graphql")
     ap.add_argument("--recipe")
@@ -78,6 +118,7 @@ def main():
         action="store_true",
         help="second runtime opt-in required before an allowlisted mutation can execute",
     )
+    ap.add_argument("--warm-ms", type=int, default=4500, help="settle wait per warm-up URL")
     ap.add_argument(
         "--delay",
         type=float,
@@ -120,15 +161,44 @@ def main():
         viewport={"width": 1600, "height": 900},
     )
     ctx.set_default_navigation_timeout(45000)
-    ctx.add_cookies(json.load(open(a.cookies)))
+    if a.cookies:
+        ctx.add_cookies(json.load(open(a.cookies)))
     page = ctx.new_page()
 
     catalog = {}
+    rest_matchers = rest_read_matchers(contract)
+
+    def first_party(url):
+        try:
+            validate_url(url, {a.base_domain}, schemes=("https", "http"))
+        except ValueError:
+            return False
+        return True
 
     def on_req(r):
+        if r.resource_type in {"xhr", "fetch"} and a.gql_marker not in r.url:
+            k = rest_op_key(rest_matchers, r.method, r.url)
+            if k and first_party(r.url):
+                catalog.setdefault(
+                    k,
+                    {
+                        "method": r.method,
+                        "url": r.url.split("#")[0],
+                        "headers": {
+                            h: v
+                            for h, v in r.headers.items()
+                            if h.lower() not in FORBIDDEN and h.lower() != "accept-encoding"
+                        },
+                        "body": None,
+                        "semantic_kind": SemanticKind.QUERY.value,
+                        "mixed_or_unsafe_batch": False,
+                        "transport": "rest",
+                    },
+                )
+            return
         if a.gql_marker in r.url:
             k = op_key(r.url)
-            if not validate_url(r.url, {a.base_domain}, schemes=("https", "http")):
+            if not first_party(r.url):
                 return
             try:
                 payload = json.loads(r.post_data or "{}")
@@ -187,7 +257,7 @@ def main():
         try:
             u = validate_url(u, {a.base_domain}, schemes=("https", "http"))
             page.goto(u, wait_until="domcontentloaded")
-            page.wait_for_timeout(4500)
+            page.wait_for_timeout(a.warm_ms)
         except Exception as e:
             log(f"[warm-err] navigation: {safe_text(e)[:50]}")
     if recipe and hasattr(recipe, "drive"):
@@ -204,6 +274,8 @@ def main():
                         resolve=True,
                     ),
                 )
+            elif getattr(recipe, "declarative", False):
+                recipe.drive(page, log, settle=lambda _kind: page.wait_for_timeout(2500))
             else:
                 recipe.drive(page, log)
         except Exception as e:
@@ -252,10 +324,11 @@ def main():
                 "indeterminate": kind == SemanticKind.MUTATION.value,
             }
         operation_contract = (contract.get("operations") or {}).get(k) or {}
-        request_payload = None
+        rest = c.get("transport") == "rest"
+        request_payload = {} if rest else None
         try:
             decoded_request = json.loads(c.get("body") or "{}")
-            if isinstance(decoded_request, dict):
+            if isinstance(decoded_request, dict) and not rest:
                 request_payload = decoded_request.get("variables", {})
         except (TypeError, json.JSONDecodeError):
             request_payload = None
@@ -268,7 +341,7 @@ def main():
             operation_contract.get("return_schema"),
             status=res.get("status"),
             media_type=str(res.get("media_type") or ""),
-            graphql=True,
+            graphql=not rest,
         )
         res["request_validation"] = request_validation
         res["response_validation"] = response_validation
@@ -286,6 +359,22 @@ def main():
             page.wait_for_timeout(int(a.delay * 1000))
 
     atomic_write_json(f"{a.outdir}/verify.json", verify)
+    # mcpgen --require-active-proof reads THIS name and a LIST shape keyed by
+    # operation. Until it was written, that read always returned {} and the gate
+    # silently demoted every tool while the docs claimed the opposite.
+    atomic_write_json(
+        f"{a.outdir}/active-verification.json",
+        [
+            {
+                "operation": name,
+                # The gate reads `ok`; `status`/`conforms` alone left every operation
+                # looking unproven even with a real artifact present.
+                "ok": result.get("status") == 200 and bool(result.get("conforms")),
+                **result,
+            }
+            for name, result in verify.items()
+        ],
+    )
     ok = sum(1 for v in verify.values() if v.get("status") == 200 and v.get("conforms"))
     log(f"[verify] {ok}/{len(verify)} ops actively verified -> {a.outdir}/verify.json")
     ctx.close()

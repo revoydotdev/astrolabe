@@ -1,0 +1,57 @@
+{
+  "version": 2,
+  "base_domain": "widgets.example.test",
+  "executable": true,
+  "tools": [
+    {
+      "name": "listWidgets",
+      "alias": "GET /v1/widgets",
+      "type": "query",
+      "semantic_kind": "query",
+      "transport": "rest",
+      "protocol": "rest",
+      "method": "GET",
+      "path": "/v1/widgets",
+      "description": "List the synthetic widgets this fixture declares. Reads nothing real.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {"widgets": {"type": "array", "items": {"type": "object"}}},
+        "required": ["widgets"],
+        "additionalProperties": false
+      },
+      "parameters": [
+        {"name": "limit", "location": "query", "required": false, "schema": {"type": "integer"}}
+      ],
+      "exposed": true,
+      "curated": true
+    },
+    {
+      "name": "deleteWidget",
+      "alias": "DELETE /v1/widgets/{widget_id}",
+      "type": "mutation",
+      "semantic_kind": "mutation",
+      "transport": "rest",
+      "protocol": "rest",
+      "method": "DELETE",
+      "path": "/v1/widgets/{widget_id}",
+      "description": "Delete one synthetic widget. Not exposed: mutations stay off by default.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"widget_id": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "parameters": [
+        {"name": "widget_id", "location": "path", "required": true, "schema": {"type": "string"}}
+      ],
+      "exposed": false,
+      "reason": "synthetic fixture: a mutation is never invocable without allow_mutations"
+    }
+  ]
+}

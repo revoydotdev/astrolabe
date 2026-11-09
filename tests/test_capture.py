@@ -262,6 +262,14 @@ def test_sigterm_flushes_a_complete_partial_capture_manifest(tmp_path):
     assert manifest["run_id"] == "cancel-test"
     for name, digest in manifest["sha256"].items():
         assert hashlib.sha256((out / name).read_bytes()).hexdigest() == digest
+    # The digests are over the artifact bytes, which is what makes the deliberate
+    # re-hash on every flush load-bearing rather than redundant bookkeeping: a
+    # changed artifact stops matching (see the ponytail: note at that block).
+    (out / "capture.jsonl").write_bytes(b'{"method":"POST","url":"https://x.test/other"}\n')
+    assert (
+        hashlib.sha256((out / "capture.jsonl").read_bytes()).hexdigest()
+        != manifest["sha256"]["capture.jsonl"]
+    )
 
 
 def test_vendor_names_not_hardcoded_in_source(capture):
@@ -622,3 +630,140 @@ def test_graphql_json_in_javascript_media_type_is_decoded(capture):
     assert capture.response_payload(Response(), 10000) is None
     decoded = capture.response_payload(Response(), 10000, graphql=True)
     assert decoded.value == {"data": {"viewer": {"id": "private"}}}
+
+
+def test_graphql_json_served_as_text_html_is_decoded(capture):
+    """Facebook serves /api/graphql/ responses under content-type text/html. Transport
+    evidence, not MIME, authorizes parsing: without the graphql signal a text/html body
+    is a document and is skipped; with it, the JSON is decoded."""
+
+    class Response:
+        headers = {"content-type": 'text/html; charset="utf-8"'}
+
+        def body(self):
+            return b'{"data":{"node":{"activity_log_stories":{"edges":[]}}}}'
+
+    assert capture.response_payload(Response(), 10000) is None
+    decoded = capture.response_payload(Response(), 10000, graphql=True)
+    assert decoded.value == {"data": {"node": {"activity_log_stories": {"edges": []}}}}
+
+
+def test_plain_text_body_is_not_a_decode_failure(capture):
+    class Properties:
+        headers = {"content-type": "text/plain;charset=UTF-8"}
+
+        def body(self):
+            return b"court.url.1=https://example.com/a\ncourt.url.2=https://example.com/b\n"
+
+    assert capture.response_payload(Properties(), 1024) is None
+
+
+def test_plain_text_json_is_still_decoded(capture):
+    class TextJson:
+        headers = {"content-type": "text/plain"}
+
+        def body(self):
+            return b'{"ok": true}'
+
+    assert capture.response_payload(TextJson(), 1024).value == {"ok": True}
+
+
+def test_structured_media_type_that_fails_to_decode_still_raises(capture):
+    class Broken:
+        headers = {"content-type": "application/json"}
+
+        def body(self):
+            return b"not json at all ~~"
+
+    with pytest.raises(ValueError):
+        capture.response_payload(Broken(), 1024)
+
+
+def test_byparr_client_speaks_the_link_request_contract(capture):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received = {}
+
+    class Byparr(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):  # noqa: N802
+            received.update(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+            body = json.dumps(
+                {
+                    "status": "ok",
+                    "message": "Success",
+                    "startTimestamp": 1,
+                    "solution": {
+                        "url": received["url"],
+                        "status": 200,
+                        "userAgent": "Solver/1.0",
+                        "cookies": [
+                            {
+                                "name": "__cf_bm",
+                                "value": "v",
+                                "domain": ".example.com",
+                                "path": "/",
+                                "expires": 2e9,
+                                "httpOnly": True,
+                                "secure": True,
+                                "sameSite": "None",
+                            },
+                            {"name": "cf_clearance", "value": "v", "domain": "app.example.com"},
+                            {"name": "tracker", "value": "v", "domain": ".other.com"},
+                            {"name": "sibling", "value": "v", "domain": "api.example.com"},
+                            {"name": "tld", "value": "v", "domain": ".com"},
+                        ],
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), Byparr)
+    threading.Thread(target=server.handle_request, daemon=True).start()
+    endpoint = f"http://127.0.0.1:{server.server_address[1]}/v1"
+    result = capture.byparr_solve(endpoint, "https://app.example.com/", timeout_s=45)
+    server.server_close()
+    assert received == {"cmd": "request.get", "url": "https://app.example.com/", "max_timeout": 45}
+    cookies = capture.challenge_cookies(result["solution"], "app.example.com")
+    assert [c["name"] for c in cookies] == ["__cf_bm", "cf_clearance"]
+    assert cookies[0]["sameSite"] == "None" and cookies[0]["httpOnly"] is True
+
+
+def test_byparr_failure_status_raises(capture, monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"status":"error","message":"Challenge not solved"}'
+
+    monkeypatch.setattr(capture.urllib.request, "urlopen", lambda *a, **k: Response())
+    with pytest.raises(RuntimeError, match="Challenge not solved"):
+        capture.byparr_solve("http://127.0.0.1:1/v1", "https://example.com/")
+
+
+def test_unlabeled_text_and_head_responses_are_not_decode_failures(capture):
+    class Unlabeled:
+        headers = {}
+
+        def body(self):
+            return b"court.url.1=https://example.com/a\n"
+
+    class Head:
+        headers = {"content-type": "application/json"}
+        request = type("Request", (), {"method": "HEAD"})()
+
+        def body(self):
+            pytest.fail("a HEAD response body was read")
+
+    assert capture.response_payload(Unlabeled(), 1024) is None
+    assert capture.response_payload(Head(), 1024) is None

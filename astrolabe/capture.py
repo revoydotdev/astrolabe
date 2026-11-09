@@ -4,8 +4,12 @@ API surface. Standalone: runs on the pipeline host in the cloakbrowser venv.
 Stdlib + cloakbrowser only.
 
 Emits into --outdir:
-  capture.jsonl     request/response *shapes* (PII-safe: no response values, no token values)
+  capture.jsonl     request/response shapes. At the default `values` fidelity primitive
+                   values are retained in request_shape/resp_shape with credentials
+                   masked (bounded by depth/keys/array caps); `shape` collapses them to
+                   type names; `raw` keeps them verbatim. Set ASTROLABE_CAPTURE_FIDELITY.
   capture.har       full HAR (feeds har-to-openapi)  [--har]
+                   at `raw` fidelity the HAR is also pulled into the chart dir.
   graphql-names.txt GraphQL operation/field/type names (clairvoyance -w wordlist)
   meta.json         graphql endpoints, auth-header model, CF/byparr events, introspection result
 
@@ -15,11 +19,22 @@ Per-site recipe (--recipe file.py) may define:
 """
 
 from __future__ import annotations
-import argparse, atexit, hashlib, json, os, re, signal, sys, time, importlib.util, urllib.request, urllib.parse as up
+import argparse
+import atexit
+import hashlib
+import json
+import os
+import re
+import signal
+import time
+import importlib.util
+import urllib.request
+import urllib.parse as up
 from datetime import UTC, datetime
+from functools import lru_cache
 
 try:
-    from astrolabe.browser import launch_context
+    from astrolabe.browser import connect_context, launch_context
     from astrolabe.graphql_doc import parse_graphql_document
     from astrolabe.media import classify_media
     from astrolabe.operation import graphql_protocol
@@ -32,19 +47,22 @@ try:
     from astrolabe.relay import RelayCatalog, MAX_SCRIPT_BYTES, MAX_SCRIPTS
     from astrolabe.client_credentials import MAX_SITES_PER_CAPTURE as MAX_CREDENTIAL_SITES
     from astrolabe.client_credentials import discover as discover_client_credentials
-    from astrolabe.payloads import decode_payload
+    from astrolabe.payloads import PackagingError, decode_payload
     from astrolabe.security import (
         atomic_write_json,
         atomic_write_text,
+        egress_policy,
+        host_matches,
         is_first_party as _shared_is_first_party,
         request_metadata,
         safe_text,
         safe_url,
         structural_shape,
+        third_party_egress,
         validate_url,
     )
 except ImportError:  # standalone deployment on the capture host
-    from browser import launch_context  # type: ignore[import-not-found,no-redef]
+    from browser import connect_context, launch_context  # type: ignore[import-not-found,no-redef]
     from graphql_doc import parse_graphql_document  # type: ignore[import-not-found,no-redef]
     from media import classify_media  # type: ignore[import-not-found,no-redef]
     from operation import graphql_protocol  # type: ignore[import-not-found,no-redef]
@@ -59,20 +77,24 @@ except ImportError:  # standalone deployment on the capture host
         MAX_SITES_PER_CAPTURE as MAX_CREDENTIAL_SITES,
         discover as discover_client_credentials,
     )
-    from payloads import decode_payload  # type: ignore[import-not-found,no-redef]
+    from payloads import PackagingError, decode_payload  # type: ignore[import-not-found,no-redef]
     from security import (  # type: ignore[import-not-found,no-redef]
         atomic_write_json,
         atomic_write_text,
+        egress_policy,
+        host_matches,
         is_first_party as _shared_is_first_party,
         request_metadata,
         safe_text,
         safe_url,
         structural_shape,
+        third_party_egress,
         validate_url,
     )
 
 API_HINT = re.compile(r"(graphql|/api/|/ab/|gql|\.json(\?|$)|/o/|/v\d/)", re.I)
 GQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+PERSISTED_PATH = re.compile(r"/graphql/([^/]+)/([_A-Za-z][_0-9A-Za-z]*)$")
 CF_MARKERS = re.compile(
     r"(just a moment|verifying you are human|cf-chl|challenge-platform|attention required)", re.I
 )
@@ -115,6 +137,49 @@ def is_auth_header(name, extra_names=(), pattern=AUTH_HEADER_PATTERN_DEFAULT):
     if n in AUTH_HEADER_NAMES_DEFAULT or n in extra_names:
         return True
     return bool(pattern.search(n))
+
+
+_COOKIE_BOOL_FIELDS = ("httpOnly", "secure", "session", "hostOnly")
+_SAMESITE_OK = {"Strict", "Lax", "None"}
+
+
+def _coerce_samesite(v):
+    if not isinstance(v, str):
+        return v
+    s = v.strip()
+    if s in _SAMESITE_OK:
+        return s
+    low = s.lower()
+    if low in ("strict",):
+        return "Strict"
+    if low in ("lax",):
+        return "Lax"
+    if low in ("none", "no_restriction", "unspecified"):
+        return "None"
+    return "Lax"
+
+
+def normalize_cookies(cookies):
+    """Force boolean fields to real booleans and sameSite to the playwright
+    enum. Some serialization paths (mcp/pydantic round-trips, hand-typed
+    JSON) store httpOnly/secure/session/hostOnly as "true"/"false" and
+    sameSite as "no_restriction"/"unspecified". Playwright rejects both."""
+    out = []
+    for cookie in cookies or ():
+        if not isinstance(cookie, dict):
+            continue
+        fixed = dict(cookie)
+        for field in _COOKIE_BOOL_FIELDS:
+            if field in fixed and not isinstance(fixed[field], bool):
+                v = fixed[field]
+                if isinstance(v, str):
+                    fixed[field] = v.strip().lower() in ("true", "1", "yes")
+                else:
+                    fixed[field] = bool(v)
+        if "sameSite" in fixed:
+            fixed["sameSite"] = _coerce_samesite(fixed["sameSite"])
+        out.append(fixed)
+    return out
 
 
 def is_secret_header(name):
@@ -169,9 +234,14 @@ SHAPE_TRUNCATIONS: dict[str, int] = {}
 
 
 def shape(v, d=0):
-    limits = dict(SHAPE_LIMITS)
-    limits["max_depth"] = max(0, limits["max_depth"] - d)
-    return structural_shape(v, counters=SHAPE_TRUNCATIONS, **limits)
+    return structural_shape(
+        v,
+        counters=SHAPE_TRUNCATIONS,
+        max_depth=max(0, SHAPE_LIMITS["max_depth"] - d),
+        max_nodes=SHAPE_LIMITS["max_nodes"],
+        max_keys=SHAPE_LIMITS["max_keys"],
+        max_array_samples=SHAPE_LIMITS["max_array_samples"],
+    )
 
 
 def graphql_entries(payload, live_url, media_type):
@@ -233,22 +303,49 @@ def graphql_entries(payload, live_url, media_type):
 
 def persisted_path(url):
     """Recognize exactly /graphql/<identifier>/<operation>, not legacy REST paths."""
-    match = re.search(r"/graphql/([^/]+)/([_A-Za-z][_0-9A-Za-z]*)$", up.urlparse(url).path)
+    match = PERSISTED_PATH.search(up.urlparse(url).path)
     return (match.group(1), match.group(2)) if match else None
+
+
+@lru_cache(maxsize=1024)
+def gql_names(query):
+    """Tokenise one query document into candidate names.
+
+    A page fires the same query text on every navigation, and a run re-tokenises it
+    once per response; the result is a pure function of the text, so it is cached
+    rather than recomputed. Capped, so an unbounded stream of distinct documents
+    cannot grow this without limit.
+    """
+    return tuple(GQL_NAME.findall(query))
 
 
 def response_payload(response, max_bytes, *, graphql=False):
     """Never wait for an unbounded stream or parse document/static responses as APIs."""
     media_type = response.headers.get("content-type", "")
     kind = media_type.split(";", 1)[0].lower()
-    if kind in {"text/event-stream", "text/html"} or (
-        not graphql and kind in {"application/javascript", "text/javascript"}
+    # GraphQL is routinely JSON served under a document/script MIME: Facebook labels
+    # its /api/graphql/ responses `text/html`, others use application/javascript.
+    # Transport evidence, not MIME alone, authorizes parsing (see the call site), so
+    # these document/script types are refused only without a GraphQL signal.
+    # text/event-stream is always an unbounded stream we must never block on.
+    if kind == "text/event-stream" or (
+        not graphql and kind in {"text/html", "application/javascript", "text/javascript"}
     ):
         return None
+    request = getattr(response, "request", None)
+    if str(getattr(request, "method", "")).upper() == "HEAD":
+        return None  # HEAD responses carry no body to decode.
     raw = response.body()
     if not raw.strip():
         return None
-    return decode_payload(raw, media_type=media_type, max_bytes=max_bytes)
+    try:
+        return decode_payload(raw, media_type=media_type, max_bytes=max_bytes)
+    except PackagingError:
+        # Plain or unlabeled text (properties files, CSV, prose) is a legitimate non-API
+        # body, not a decode failure. A body labeled GraphQL or structured still fails.
+        if not graphql and (not kind or kind.startswith("text/")) and kind != "text/json":
+            return None
+        raise
 
 
 def admit_request(
@@ -324,7 +421,7 @@ def rate_stopped(directory, origin):
     return bool(directory and os.path.exists(rate_stop_path(directory, origin)))
 
 
-def browser_context_options(proxy, outdir, *, record_har=False):
+def browser_context_options(proxy, outdir, *, record_har=False, user_agent=None):
     options = {
         "headless": True,
         "stealth_args": True,
@@ -337,6 +434,8 @@ def browser_context_options(proxy, outdir, *, record_har=False):
     }
     if proxy:
         options["proxy"] = proxy
+    if user_agent:
+        options["user_agent"] = user_agent
     if record_har:
         options["record_har_path"] = os.path.join(outdir, "capture.har")
         options["record_har_mode"] = "full"
@@ -473,11 +572,50 @@ def load_recipe(path, *, allow_inprocess=False):
     return m
 
 
-def byparr_solve(endpoint, url, timeout=60000):
-    body = json.dumps({"cmd": "request.get", "url": url, "maxTimeout": timeout}).encode()
+def byparr_solve(endpoint, url, timeout_s=60):
+    """Solve a challenge with Byparr's /v1 LinkRequest contract.
+
+    Byparr takes `max_timeout` in seconds; FlareSolverr's millisecond `maxTimeout`
+    is not part of its schema and was silently ignored.
+    """
+    body = json.dumps({"cmd": "request.get", "url": url, "max_timeout": int(timeout_s)}).encode()
     req = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout / 1000 + 10) as r:
-        return json.loads(r.read())
+    with urllib.request.urlopen(req, timeout=timeout_s + 30) as r:
+        result = json.loads(r.read())
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        message = result.get("message") if isinstance(result, dict) else None
+        raise RuntimeError(f"byparr did not solve the challenge: {safe_text(message)[:200]}")
+    return result
+
+
+def challenge_cookies(solution, base):
+    """Playwright cookies from a Byparr Solution, limited to the target's own domain."""
+    cookies = []
+    for cookie in solution.get("cookies") or []:
+        if not isinstance(cookie, dict) or not cookie.get("name"):
+            continue
+        domain = str(cookie.get("domain") or "." + base)
+        cookie_host = domain.lstrip(".").lower()
+        # Browser domain-matching: the target must be the cookie domain or beneath it
+        # (a parent-domain __cf_bm is sent to the target). Single-label domains are
+        # never valid cookie scopes.
+        if "." not in cookie_host or not host_matches(base, cookie_host):
+            continue
+        entry = {
+            "name": cookie["name"],
+            "value": str(cookie.get("value") or ""),
+            "domain": domain,
+            "path": cookie.get("path") or "/",
+        }
+        if isinstance(cookie.get("expires"), (int, float)) and cookie["expires"] > 0:
+            entry["expires"] = cookie["expires"]
+        for flag in ("httpOnly", "secure"):
+            if isinstance(cookie.get(flag), bool):
+                entry[flag] = cookie[flag]
+        if cookie.get("sameSite") in {"Lax", "None", "Strict"}:
+            entry["sameSite"] = cookie["sameSite"]
+        cookies.append(entry)
+    return cookies
 
 
 # ---- adaptive settle detection ---------------------------------------------
@@ -620,7 +758,7 @@ def settle_or_wait(
     return elapsed, n_calls, settled
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cookies")
     ap.add_argument("--recipe")
@@ -647,6 +785,17 @@ def main():
     ap.add_argument("--base-domain", required=True)
     ap.add_argument("--proxy", default=None)
     ap.add_argument("--byparr", default=None, help="byparr /v1 endpoint for CF fallback")
+    ap.add_argument(
+        "--user-agent",
+        default=None,
+        help="browser user agent; pair with challenge cookies minted under that agent",
+    )
+    ap.add_argument(
+        "--cdp-endpoint",
+        default=None,
+        help="attach to a running loopback Chromium (http://127.0.0.1:PORT) and reuse "
+        "its session instead of launching a browser",
+    )
     ap.add_argument("--outdir", default=".")
     ap.add_argument("--run-id", help="caller-generated identity used to reject stale transfers")
     ap.add_argument("--har", action="store_true")
@@ -692,7 +841,16 @@ def main():
         help="disable settle detection; restore the old flat "
         "sleep(wait) behavior (debugging escape hatch)",
     )
-    a = ap.parse_args()
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
+    if a.cdp_endpoint and (a.cookies or a.proxy or a.har or a.user_agent):
+        raise SystemExit(
+            "--cdp-endpoint reuses the attached browser's own session; it cannot combine "
+            "with --cookies, --proxy, --har, or --user-agent"
+        )
     for option, value in (
         ("--max-total-requests", a.max_total_requests),
         ("--max-origin-requests", a.max_origin_requests),
@@ -758,6 +916,12 @@ def main():
         "rate_limits": {},
     }
     strict_recipe_egress = [False]
+    # Resolved once, up front: a bad operator value must fail the run before a browser
+    # opens, and the run's reported policy must be the one actually enforced.
+    try:
+        egress = egress_policy()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if a.run_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", a.run_id):
         raise SystemExit("--run-id contains unsupported characters")
     run_state = {
@@ -824,11 +988,20 @@ def main():
     relay_catalog = RelayCatalog()
     credential_sites: list[dict] = []
 
-    kw = browser_context_options(a.proxy, a.outdir, record_har=a.har)
-    ctx = launch_context(**kw)
+    if a.cdp_endpoint:
+        # Attached mode shares the operator's browser. Everything astrolabe installs
+        # (routing, listeners, init scripts) is scoped to its own page so the
+        # operator's other tabs are neither budgeted, blocked, nor recorded.
+        ctx = connect_context(a.cdp_endpoint)
+        page = ctx.new_page()
+        traffic = page
+    else:
+        kw = browser_context_options(a.proxy, a.outdir, record_har=a.har, user_agent=a.user_agent)
+        ctx = launch_context(**kw)
+        traffic = ctx
     if a.recover_persisted:
-        ctx.add_init_script(RECOVERY_INIT_SCRIPT)
-    ctx.set_default_navigation_timeout(45000)
+        traffic.add_init_script(RECOVERY_INIT_SCRIPT)
+    traffic.set_default_navigation_timeout(45000)
 
     def enforce_request_budget(route):
         request = route.request
@@ -845,12 +1018,16 @@ def main():
         if rate_stopped(a.rate_stop_dir, origin):
             budget_state["blocked_origins"].add(origin)
         if not _first_party(request.url):
-            if strict_recipe_egress[0]:
+            abort, truncation = third_party_egress(
+                policy=egress,
+                recipe_active=strict_recipe_egress[0],
+            )
+            if abort:
                 budget_state["truncation_count"] += 1
                 if len(budget_state["truncations"]) < 1000:
                     budget_state["truncations"].append(
                         {
-                            "reason": "recipe-egress-policy",
+                            "reason": truncation,
                             "origin": origin,
                             "operation": operation,
                         }
@@ -872,7 +1049,7 @@ def main():
             return
         route.continue_()
 
-    ctx.route("**/*", enforce_request_budget)
+    traffic.route("**/*", enforce_request_budget)
     try:
         ctx.on(
             "serviceworker",
@@ -881,7 +1058,7 @@ def main():
     except Exception as exc:
         record_failure("service-worker", "browser", exc)
     if a.cookies:
-        ctx.add_cookies(json.load(open(a.cookies)))
+        ctx.add_cookies(normalize_cookies(json.load(open(a.cookies))))
 
     def on_response(resp):
         if jf.closed:
@@ -978,16 +1155,7 @@ def main():
                 body = getattr(req, "post_data_buffer", None)
                 record_failure("request-body", "body-decode", exc, context=url)
             if body:
-                rec.update(
-                    request_metadata(
-                        body,
-                        req.headers.get("content-type", ""),
-                        content_encoding=req.headers.get("content-encoding", ""),
-                        max_body_bytes=a.body_max_bytes,
-                        shape_counters=SHAPE_TRUNCATIONS,
-                        shape_limits=SHAPE_LIMITS,
-                    )
-                )
+                decoded_request = None
                 try:
                     raw_request = body if isinstance(body, bytes) else body.encode("utf-8")
                     decoded_request = decode_payload(
@@ -996,8 +1164,23 @@ def main():
                         content_encoding=req.headers.get("content-encoding", ""),
                         max_bytes=a.body_max_bytes,
                     )
+                except Exception:
+                    pass
+                rec.update(
+                    request_metadata(
+                        body,
+                        req.headers.get("content-type", ""),
+                        content_encoding=req.headers.get("content-encoding", ""),
+                        max_body_bytes=a.body_max_bytes,
+                        shape_counters=SHAPE_TRUNCATIONS,
+                        shape_limits=SHAPE_LIMITS,
+                        decoded_payload=decoded_request,
+                    )
+                )
+                try:
+                    if decoded_request is None:
+                        raise PackagingError("request body is not decodable")
                     j = decoded_request.value
-                    rec["request_packaging"] = list(decoded_request.layers)
                     payloads = j if isinstance(j, list) else [j]
                     ops = []
                     for p in payloads:
@@ -1005,7 +1188,7 @@ def main():
                             continue
                         if "query" in p or "operationName" in p or "extensions" in p:
                             q = p.get("query") or ""
-                            names.update(GQL_NAME.findall(q))
+                            names.update(gql_names(q))
                             if p.get("operationName"):
                                 names.add(p["operationName"])
                             ops.extend(
@@ -1077,7 +1260,7 @@ def main():
             # only valid shape.
             content_type = req.headers.get("content-type", "").split(";", 1)[0].lower()
             if "graphql" not in rec and body and content_type == "application/graphql":
-                names.update(GQL_NAME.findall(body))
+                names.update(gql_names(body))
                 rec["graphql"] = graphql_entries({"query": body}, live_url, content_type)
                 path = up.urlparse(url).path
                 gql_endpoints.setdefault(path, {"count": 0})["count"] += 1
@@ -1096,7 +1279,7 @@ def main():
                                 envelope[key] = json.loads(raw_value)
                             except Exception as exc:
                                 record_failure("graphql-get-envelope", "parse", exc, context=url)
-                    names.update(GQL_NAME.findall(query_text))
+                    names.update(gql_names(query_text))
                     rec["graphql"] = graphql_entries(envelope, live_url, content_type)
                     path = up.urlparse(url).path
                     gql_endpoints.setdefault(path, {"count": 0})["count"] += 1
@@ -1224,8 +1407,9 @@ def main():
                 partial=True,
             )
 
-    ctx.on("response", on_response)
-    page = ctx.new_page()
+    traffic.on("response", on_response)
+    if not a.cdp_endpoint:
+        page = ctx.new_page()
     last_auth = {}  # keep live auth header VALUES in memory for introspection (never persisted)
 
     def track_auth(req):
@@ -1392,24 +1576,29 @@ def main():
             url = validate_url(url, {base}, schemes=("https", "http"), resolve=True)
             page.goto(url, wait_until="domcontentloaded")
             _settle("visit")
-            if cf_blocked() and a.byparr:
+            if cf_blocked() and a.byparr and not a.cdp_endpoint:
                 log(f"[cf] challenge on {url} -> byparr")
                 events["cf"].append(url)
                 try:
-                    sol = byparr_solve(a.byparr, url).get("solution", {})
+                    sol = byparr_solve(a.byparr, url).get("solution") or {}
                     cks = [
-                        {
-                            "name": c["name"],
-                            "value": c["value"],
-                            "domain": c.get("domain", "." + base),
-                            "path": c.get("path", "/"),
-                        }
-                        for c in sol.get("cookies", [])
+                        c
+                        for c in challenge_cookies(sol, base)
                         if c["name"] in ("cf_clearance", "__cf_bm")
                     ]
                     if cks:
                         ctx.add_cookies(cks)
-                        events["byparr"].append({"url": url, "injected": [c["name"] for c in cks]})
+                        solver_agent = str(sol.get("userAgent") or "")
+                        if solver_agent:
+                            # Clearance is bound to the agent that solved it.
+                            page.set_extra_http_headers({"User-Agent": solver_agent})
+                        events["byparr"].append(
+                            {
+                                "url": url,
+                                "injected": [c["name"] for c in cks],
+                                "user_agent_aligned": bool(solver_agent),
+                            }
+                        )
                         page.goto(url, wait_until="domcontentloaded")
                         _settle("byparr-retry")
                         log(f"[byparr] injected {[c['name'] for c in cks]}, retried")
@@ -1459,6 +1648,7 @@ def main():
             os.path.join(a.outdir, "meta.json"),
             {
                 "base_domain": base,
+                "egress_policy": egress,
                 "graphql_endpoints": gql_endpoints,
                 "auth_headers": auth_seen,
                 "events": events,
@@ -1529,6 +1719,15 @@ def main():
         if last_auth:
             ap_ = os.path.join(a.outdir, "auth.headers.json")
             atomic_write_json(ap_, {k: v for k, v in last_auth.items()}, mode=0o600)
+        # ponytail: a normal run hashes capture.jsonl twice — once here, once when
+        # atexit re-runs this function with nothing left to change. Measured on this
+        # box: 0.02 ms for a 34 KiB capture, 3.3 ms for a full-budget 5.7 MiB one
+        # (4000 records), 16.5 ms at a 28 MiB pathological size, against a browser
+        # session measured in tens of seconds. Skipping the second pass needs a
+        # "nothing changed" flag, and that flag can only be wrong in the direction
+        # that ships a stale checksum after an unclean exit -- so the cost stays.
+        # Ceiling: it stays linear in capture size. Upgrade path: hash the writes as
+        # they happen (a running digest per artifact) if that ever costs real time.
         checksums = {}
         for artifact_name in ("capture.jsonl", "meta.json", "graphql-names.txt"):
             artifact_path = os.path.join(a.outdir, artifact_name)
@@ -1549,7 +1748,7 @@ def main():
         run_state["completed_at"] = datetime.now(UTC).isoformat()
         record_failure("capture", "cancellation", RuntimeError(f"signal {signum}"), partial=True)
         try:
-            ctx.remove_listener("response", on_response)
+            traffic.remove_listener("response", on_response)
         except Exception:
             pass  # A closing browser must not prevent partial-artifact flushing.
         flush_meta()
@@ -1567,23 +1766,18 @@ def main():
     signal.signal(signal.SIGINT, _on_term)
     atexit.register(flush_meta)
 
+    # Links are harvested from every surface, not only whichever page happened to be
+    # current after the last seed, so each seed contributes crawl candidates.
+    crawl_candidates: list[str] = []
     for u in surfaces:
-        visit(u, 4.0)
-
-    # optional shallow same-origin crawl
-    if a.crawl and surfaces:
-        try:
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            seen = set(surfaces)
-            for h in hrefs:
-                if len([s for s in seen]) >= len(surfaces) + a.crawl:
-                    break
-                if _first_party(h) and h not in seen and up.urlparse(h).path not in ("", "/"):
-                    seen.add(h)
-                    visit(h, 3.0)
-        except Exception as e:
-            record_failure("crawl", "browser", e, partial=True)
-            log(f"[crawl-ERR] {safe_text(e)}")
+        landed = visit(u, 4.0)
+        if a.crawl and landed:
+            try:
+                crawl_candidates += page.eval_on_selector_all(
+                    "a[href]", "els => els.map(e => e.href)"
+                )
+            except Exception as e:
+                record_failure("crawl", "browser", e, context=safe_url(u))
 
     # recipe custom driving (search filters, pagers, settings nav)
     if recipe and hasattr(recipe, "drive"):
@@ -1592,12 +1786,13 @@ def main():
         def finish_action() -> None:
             interaction = active_action[0]
             if interaction is not None:
+                settled = interaction.get("settled", True)
                 interaction.update(
                     {
                         "calls": stats["n"] - interaction["calls_before"],
-                        "settled": True,
+                        "settled": settled,
                         "completed_at": datetime.now(UTC).isoformat(),
-                        "truncation_reason": None,
+                        "truncation_reason": None if settled else "settle_ceiling",
                     }
                 )
 
@@ -1608,7 +1803,26 @@ def main():
         try:
             strict_recipe_egress[0] = True
             if getattr(recipe, "declarative", False):
-                recipe.drive(page, log, start_action)
+
+                def settle_action(kind: str) -> None:
+                    outcome = settle_or_wait(
+                        page,
+                        stats,
+                        3.0,
+                        no_settle=a.no_settle,
+                        min_ms=a.settle_min_ms,
+                        settle_ms=a.settle_ms,
+                        ceiling_ms=a.settle_timeout_ms,
+                        log=log,
+                        label=f"action:{kind}",
+                        url=safe_url(getattr(page, "url", "")),
+                    )
+                    interaction = active_action[0]
+                    if outcome and interaction is not None:
+                        interaction["settle_seconds"] = outcome[0]
+                        interaction["settled"] = outcome[2]
+
+                recipe.drive(page, log, start_action, settle=settle_action)
             elif getattr(recipe, "sandboxed", False):
                 recipe.drive(
                     page,
@@ -1632,6 +1846,20 @@ def main():
             strict_recipe_egress[0] = False
             finish_action()
             stats["interaction_id"] = None
+
+    # optional shallow same-origin crawl — after drive(), so recipe actions start on
+    # the seed page instead of whichever link the crawl happened to visit last
+    if a.crawl and crawl_candidates:
+        seen = set(surfaces)
+        crawled = 0
+        for h in crawl_candidates:
+            if crawled >= a.crawl:
+                break
+            h = h.split("#", 1)[0]
+            if _first_party(h) and h not in seen and up.urlparse(h).path not in ("", "/"):
+                seen.add(h)
+                crawled += 1
+                visit(h, 3.0)
 
     # ---- active probing: fire recipe-declared endpoints through the page's own
     #      fetch() context, using session headers harvested from the SPA's XHRs.
@@ -1672,16 +1900,18 @@ def main():
         for h, v in last_auth.items():
             if not h.startswith("_") and h not in sess_hdrs:
                 sess_hdrs[h] = v
-        # auto-generate page-context headers the API may validate (x-referer,
-        # x-page-unique-id). These match what the SPA sends on its own XHRs.
-        import base64 as _b64
+        # Page-context headers some APIs validate (x-referer, x-page-unique-id) are
+        # only added when the recipe asks for them; sending them unconditionally made
+        # every probe distinguishable from the SPA's own traffic on most sites.
+        if getattr(recipe, "PAGE_CONTEXT_HEADERS", False):
+            import base64 as _b64
 
-        try:
-            cur_url = page.url
-            sess_hdrs.setdefault("x-referer", cur_url)
-            sess_hdrs.setdefault("x-page-unique-id", _b64.b64encode(cur_url.encode()).decode())
-        except Exception:
-            pass
+            try:
+                cur_url = page.url
+                sess_hdrs.setdefault("x-referer", cur_url)
+                sess_hdrs.setdefault("x-page-unique-id", _b64.b64encode(cur_url.encode()).decode())
+            except Exception:
+                pass
 
         for probe in probes:
             method = probe.get("method", "GET")
@@ -1694,7 +1924,8 @@ def main():
             )
             hdrs = dict(sess_hdrs)
             hdrs["accept"] = "application/json, text/plain, */*"
-            hdrs["x-api-correlation-id"] = __import__("uuid").uuid4().hex
+            if getattr(recipe, "PAGE_CONTEXT_HEADERS", False):
+                hdrs["x-api-correlation-id"] = __import__("uuid").uuid4().hex
             if method == "POST" and body:
                 hdrs["content-type"] = "application/json"
             fetch_opts = {"method": method, "headers": hdrs}
@@ -1836,7 +2067,7 @@ def main():
         record_failure("offline-queue", "browser", exc)
     run_state["completed_at"] = datetime.now(UTC).isoformat()
     try:
-        ctx.remove_listener("response", on_response)
+        traffic.remove_listener("response", on_response)
     except Exception:
         pass
     flush_meta()

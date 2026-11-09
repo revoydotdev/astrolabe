@@ -9,7 +9,6 @@ import pytest
 
 from astrolabe.analyze import render
 from astrolabe.capture import graphql_entries
-from astrolabe.mcp_server import ConfigurationError, Settings, _validate_pack
 from astrolabe.mcpgen import build_pack
 from astrolabe.persisted import (
     MAX_DOCUMENT_BYTES,
@@ -18,6 +17,7 @@ from astrolabe.persisted import (
     bind_document,
     graphql_response_success,
 )
+from astrolabe.toolpack import ConfigurationError, Settings, _validate_pack
 
 
 def test_browser_observer_preserves_digest_and_only_exports_matching_documents():

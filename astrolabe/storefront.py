@@ -19,6 +19,15 @@ from urllib.parse import urlsplit
 
 from curl_cffi import requests as curl_requests
 
+try:
+    from .transport import RETRYABLE_STATUS, retry_after_header, retry_delay
+except ImportError:  # flat capture-host deployment
+    from transport import (  # type: ignore[import-not-found,no-redef]
+        RETRYABLE_STATUS,
+        retry_after_header,
+        retry_delay,
+    )
+
 API_VERSION = "2024-10"
 PAGE_SIZE = 250
 VARIANT_PAGE_SIZE = 250
@@ -221,6 +230,7 @@ class Collector:
             while True:
                 payload = None
                 for attempt in range(self.retries + 1):
+                    response = None
                     try:
                         response = await session.post(
                             endpoint,
@@ -232,14 +242,19 @@ class Collector:
                                 "variables": {"first": PAGE_SIZE, "after": after},
                             },
                         )
-                        if response.status_code != 200:
-                            raise StorefrontContractError(f"HTTP {response.status_code}")
-                        payload = response.json()
-                        break
                     except Exception:
                         if attempt >= self.retries:
                             raise
-                        await asyncio.sleep(min(4, 0.25 * 2**attempt))
+                        await asyncio.sleep(retry_delay(attempt, None))
+                        continue
+                    if response.status_code == 200:
+                        payload = response.json()
+                        break
+                    # A 4xx is a verdict on the request, not a transient fault:
+                    # repeating it spends the rate-limit budget to be told the same thing.
+                    if response.status_code not in RETRYABLE_STATUS or attempt >= self.retries:
+                        raise StorefrontContractError(f"HTTP {response.status_code}")
+                    await asyncio.sleep(retry_delay(attempt, retry_after_header(response)))
                 rows, has_next, end_cursor, product_count = parse_page(
                     payload,
                     host=host,

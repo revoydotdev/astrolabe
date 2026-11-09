@@ -27,12 +27,17 @@ op-file JSON:
 """
 
 from __future__ import annotations
-import argparse, json, os, time, urllib.parse as up
+import argparse
+import json
+import os
+import time
+import urllib.parse as up
 from curl_cffi import requests
 
 try:
     from astrolabe.credentials import generations_match, unwrap_cookies, unwrap_credentials
     from astrolabe.security import atomic_write_json, safe_text, validate_url
+    from astrolabe.transport import RETRYABLE_STATUS, retry_after_header, retry_delay
 except ImportError:
     from credentials import (  # type: ignore[import-not-found,no-redef]
         generations_match,
@@ -43,6 +48,11 @@ except ImportError:
         atomic_write_json,
         safe_text,
         validate_url,
+    )
+    from transport import (  # type: ignore[import-not-found,no-redef]
+        RETRYABLE_STATUS,
+        retry_after_header,
+        retry_delay,
     )
 
 # Hop-by-hop / connection-management header names (RFC 7230 §6.1, plus a couple
@@ -81,6 +91,22 @@ def dget(obj, path):
     return cur
 
 
+def _post_retrying(session, url, *, headers, body, retries):
+    """POST once, repeating only a retryable status. Returns (response, attempts).
+
+    A sweep that treats one 429 as a failed sample under-reports the origin, so
+    the wait is the origin's own ``Retry-After`` when it sends one. A 4xx is
+    returned immediately: it is a verdict, not a transient fault.
+    """
+    attempts = 0
+    while True:
+        attempts += 1
+        response = session.post(url, headers=headers, data=body, timeout=30)
+        if response.status_code not in RETRYABLE_STATUS or attempts > retries:
+            return response, attempts
+        time.sleep(retry_delay(attempts - 1, retry_after_header(response)))
+
+
 def dset(obj, path, val):
     parts = path.split(".")
     cur = obj
@@ -105,6 +131,12 @@ def main():
         "--interval", type=float, default=0.0, help="seconds between calls (rate limit)"
     )
     ap.add_argument("--impersonate", default="chrome")
+    ap.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="retries for a rate-limited or transiently failing origin; 0 disables",
+    )
     a = ap.parse_args()
 
     op = json.load(open(a.op_file))
@@ -157,11 +189,12 @@ def main():
             dset(variables, vpath, v)
         t = time.time()
         try:
-            r = s.post(
+            r, attempts = _post_retrying(
+                s,
                 url,
                 headers=headers,
-                data=json.dumps({"query": op["query"], "variables": variables}),
-                timeout=30,
+                body=json.dumps({"query": op["query"], "variables": variables}),
+                retries=a.retries,
             )
             dt = round((time.time() - t) * 1000)
             try:
@@ -180,6 +213,7 @@ def main():
                 "vary": v,
                 "status": r.status_code,
                 "ms": dt,
+                "attempts": attempts,
                 "extracted": extracted,
                 "error": err,
             }

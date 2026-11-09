@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json as _json
 
+import astrolabe.contract as contract_module
 from astrolabe.contract import (
     SCHEMA_VERSION,
     apply_active,
@@ -744,3 +745,164 @@ def test_render_md_includes_scorecard() -> None:
     assert "Coverage scorecard" in md
     assert "added: `c`" in md
     assert "| `a` | query |" in md
+
+
+# ----- todo 19: top-level union, proof decay, and foreign-contract tolerance ---
+
+
+def test_merge_unions_endpoints_not_just_operations() -> None:
+    """Operations were unioned while the rest of the record was last-writer-wins, so an
+    endpoint seen only in an earlier run vanished while its operations survived."""
+    prior = _contract({"a": _op(_schema(x="string"))})
+    prior["endpoints"] = ["/api/only-in-prior"]
+    cur = _contract({"a": _op(_schema(x="string"))})
+    cur["endpoints"] = []
+    merged, _ = merge(prior, cur)
+    assert "/api/only-in-prior" in merged["endpoints"]
+    assert merged["endpoints"] == ["/api/only-in-prior"]
+
+
+def test_merge_unions_auth_headers_too() -> None:
+    prior = _contract({"a": _op(_schema(x="string"))})
+    prior["auth_headers"] = ["x-prior-only"]
+    cur = _contract({"a": _op(_schema(x="string"))})
+    cur["auth_headers"] = []
+    merged, _ = merge(prior, cur)
+    assert "x-prior-only" in merged["auth_headers"]
+
+
+def test_merge_union_keeps_both_ends_and_dedupes() -> None:
+    prior = _contract({"a": _op(_schema(x="string"))})
+    prior["endpoints"] = ["/shared", "/only-prior"]
+    cur = _contract({"a": _op(_schema(x="string"))})
+    cur["endpoints"] = ["/shared", "/only-cur"]
+    merged, _ = merge(prior, cur)
+    assert merged["endpoints"] == ["/shared", "/only-cur", "/only-prior"]
+
+
+def test_active_proof_decays_after_repeated_absence() -> None:
+    """A prior-only operation used to keep verified-active forever.
+
+    One run that misses it is weak evidence -- a capture may simply not have visited
+    that surface -- so decay is deliberately two consecutive misses, not one.
+    """
+    from astrolabe.contract import UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY
+
+    prior = _contract({"gone": _op_with(True, True, True)})
+    cur = _contract({"other": _op(_schema(z="string"))})
+
+    once, _ = merge(prior, cur)
+    assert once["operations"]["gone"]["status"] == "verified-active"
+    assert once["operations"]["gone"]["proof"]["runs_unobserved"] == 1
+
+    twice, _ = merge(once, cur)
+    assert (
+        twice["operations"]["gone"]["proof"]["runs_unobserved"]
+        == UNOBSERVED_RUNS_BEFORE_ACTIVE_DECAY
+    )
+    assert twice["operations"]["gone"]["status"] != "verified-active"
+    assert twice["operations"]["gone"]["proof"]["active"] is None
+    # The proof of what did happen is kept; only the current claim stops being made.
+    assert twice["operations"]["gone"]["proof"]["active_decayed"] is True
+
+
+def test_observed_operation_still_seen_does_not_decay() -> None:
+    prior = _contract({"a": _op_with(True, True, True)})
+    cur = _contract({"a": _op(_schema(x="string"))})
+    merged, _ = merge(prior, cur)
+    assert "runs_unobserved" not in merged["operations"]["a"]["proof"]
+
+
+def test_classify_degrades_on_a_contract_missing_proof_fields() -> None:
+    assert classify({"operation": "query", "type": "query"}) == "listed"
+    assert classify({"operation": "q", "type": "q", "proof": {}}) == "listed"
+
+
+def test_coverage_and_render_tolerate_a_foreign_operation() -> None:
+    """A hand-edited or older contract must degrade, not raise KeyError."""
+    foreign = {
+        "operation": "LegacyOp",
+        "type": "query",
+        "status": "typed-unproven",
+    }
+    contract = {
+        "schema_version": SCHEMA_VERSION,
+        "base_domain": "example.com",
+        "endpoints": [],
+        "auth_headers": [],
+        "operations": {"LegacyOp": foreign},
+    }
+    stats = coverage(contract)
+    assert stats["total"] == 1
+    assert stats["typed_input"] == 0
+    assert stats["verified_observed"] == 0
+    assert stats["verified_active"] == 0
+    rendered = render_md(contract, {"added": [], "removed": [], "changed": [], "breaking": []})
+    assert "LegacyOp" in rendered
+
+
+def test_breaking_drift_line_explains_the_union() -> None:
+    """The contract keeps a union of both schemas, so 'field removed' must not read as
+    contradicting the table that still types the field."""
+    prior = _contract({"a": _op(_schema(x="string", y="string"))})
+    cur = _contract({"a": _op(_schema(x="string"))})
+    _, drift = merge(prior, cur)
+    assert drift["breaking"] == ["a"]
+    rendered = render_md(cur, drift)
+    line = next(row for row in rendered.splitlines() if "**breaking**" in row)
+    assert "union" in line
+
+
+def test_rest_return_shape_is_merged_exactly_once_per_method_and_path(tmp_path, monkeypatch):
+    """build_from_capture used to call merge_shapes twice for the same
+    (method, path) key -- once for the return schema, once for the truthiness
+    check that decides proof.observed.ok -- so a capture with many REST endpoints
+    merged every endpoint's shapes twice. The count is asserted rather than the
+    timing: a duplicate call costs little, but the assertion is what makes a
+    future re-duplication fail instead of merely get slower."""
+    rest = [
+        {
+            "method": "GET",
+            "path": f"/api/items/{name}/{{id}}",
+            "auth_headers": [],
+            "calls": 1,
+            "status": [200],
+        }
+        for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+    ]
+    (tmp_path / "endpoints.json").write_text(_json.dumps(_endpoints_with_rest(rest)))
+    (tmp_path / "capture.jsonl").write_text(
+        "".join(
+            _json.dumps(
+                {
+                    "method": "GET",
+                    "url": f"https://shopgoodwill.example/api/items/{name}/111222",
+                    "status": 200,
+                    "resp_shape": {"id": "int", "title": "str"},
+                }
+            )
+            + "\n"
+            for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+        )
+    )
+
+    calls: list[object] = []
+    real = contract_module.merge_shapes
+
+    def counting_merge(shapes, *args, **kwargs):
+        calls.append(shapes)
+        return real(shapes, *args, **kwargs)
+
+    monkeypatch.setattr(contract_module, "merge_shapes", counting_merge)
+    built = build_from_capture(str(tmp_path))
+
+    rest_calls = [c for c in calls if isinstance(c, list)]
+    assert len(rest_calls) == len(rest), f"expected one merge per REST key, got {len(rest_calls)}"
+    for path in (
+        f"/api/items/{name}/{{id}}" for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+    ):
+        op = built["operations"][f"GET {path}"]
+        # The result is still consumed: one call feeding both the stored schema
+        # and the observed proof, not a call that was simply dropped.
+        assert op["return_schema"]["properties"]["title"] == {"type": "string"}
+        assert op["proof"]["observed"]["ok"] is True

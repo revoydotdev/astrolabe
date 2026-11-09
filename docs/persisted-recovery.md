@@ -41,7 +41,7 @@ astrolabe map example.com --local --no-burp \
   --seeds https://example.com/feed --max-total-requests 100
 ```
 
-Use the generated Chart server (`astrolabe-mcp`, `ASTROLABE_TOOLPACK`,
+Use the generated Chart server (`sextant-mcp`, `ASTROLABE_TOOLPACK`,
 `ASTROLABE_COOKIES`, and an exact per-operation `ASTROLABE_AUTH` header map)
 for `verify_operation` and `invoke_query`. Verification reports schema validation,
 success, timestamp, and the persisted document hash. Discovery and HTTP success
@@ -110,89 +110,6 @@ until an exact request replay adapter exists.
 Shape truncation markers are evidence metadata, not JSON response properties.
 The schema merger preserves observed nullability and leaves truncated values
 unconstrained; it does not assert that a partial shape is a complete GraphQL schema.
-
-## Nextdoor dogfood, 2026-09-08
-
-Native MCP mapping recovered all 16 observed GraphQL documents, including
-`getMe` and `PersonalizedFeed`. The generated Chart exposed 12 GraphQL reads and
-two REST reads. The timestamp update and exposure logging operations were parsed
-as mutations and stayed disabled. Both `getMe` and a one-item `PersonalizedFeed`
-request succeeded through the generated MCP verification tool with schema
-validation. No Nextdoor documents, credentials, or feed bodies are checked into
-this repository; live evidence stays in the operator's private capture workspace.
-
-The run also found and fixed native-null/truncation schema handling and a verification
-reporting bug that treated successful GraphQL envelopes without an `ok` field as
-failures. Verification now requires actual schema validation and no operation errors.
-
-## X dogfood, 2026-09-09
-
-X serves persisted queries as `/i/api/graphql/<queryId>/<OperationName>`, captured
-under the `graphql-x-persisted` protocol. Web Crypto recovery does not apply: the
-client never hashes the document, so there is no plaintext hash input to observe.
-
-That is the same precomputed-ID condition as Meta `doc_id`, and it has the same
-answer: resolve the ID from the application's own compiler output rather than
-from the request. X ships one webpack module per operation whose entire body is a
-literal export binding the ID to its name and kind:
-
-```js
-123456(e){e.exports={queryId:"...",operationName:"...",operationType:"query",...}}
-```
-
-`_x_registry` recovers these under the evidence rules the Relay path already uses:
-tree-sitter only, literal fields only, exactly one exported statement assigning to
-the module's own parameter. A computed ID, a rebound export target, a second
-statement, a computed key or a malformed module is rejected rather than
-interpreted. Joining still requires exact ID and operation-name agreement with no
-conflicting kind for that ID, and an exhausted budget authorizes nothing.
-Evidence is not interchangeable between protocols: `graphql-meta-doc-id` accepts
-only `relay-compiler-ast` and `graphql-x-persisted` only `x-persisted-registry`,
-so a Relay artifact cannot classify an X operation or the reverse.
-
-Verified against X's live `responsive-web` bundle: `main.js` alone yields 104
-registry artifacts (67 queries, 37 mutations) and binds four of the fifteen
-operations this capture observed, including `DataSaverMode`, with an exact name
-match. The remaining eleven live in other chunks that a logged-in page load
-fetches. No X bundle content is copied into this repository; the tests use
-independently authored synthetic modules.
-
-Two budgets bound this end to end, and the fix for each is now in place. The
-script cap was one: the first observed page loaded 294 scripts against
-`MAX_SCRIPTS = 256`, so the catalog was marked exhausted and bound nothing. The
-cap is now 512. The second was the 64 MiB cumulative byte budget: a broad
-authenticated walk loads X's large marker-less framework bundles, which counted
-against recovery without ever producing an artifact and exhausted it. Scripts with
-none of the recovery markers are now skipped before they count, so the byte and
-script budgets are spent on candidate bundles. An exhausted catalog still
-authorizes nothing; the per-script (8 MiB) and total (64 MiB) byte guards are
-unchanged.
-
-Authenticated dogfood, 2026-09-09: native `--browser vivaldi` import of a live
-x.com session, local strict-TLS capture (no Burp, no VPN re-routing of the
-session), `--recover-persisted --block-assets --max-operation-requests 2` across
-ten authenticated surfaces. `--block-assets` blocks only image/media/font; X's
-request-eaters are first-party telemetry XHR (`flow/timeline.json`,
-`viewer_context`, `app_context`, CSP and measurement beacons), which the low
-per-operation cap throttles by capping repeat calls to each endpoint. The walk
-completed within the 100-request native cap (81 used, not partial), loaded 260
-candidate scripts / 3079 artifacts without exhausting recovery, and classified
-19 of 21 observed persisted operations from compiler metadata: 14 exposed reads
-(`HomeTimeline`, `NotificationsTimeline`, `ExploreSidebar`, `PinnedTimelines`,
-`SidebarUserRecommendations`, `DataSaverMode`, `CreatorStudioTabBarItemQuery`,
-`NflScoresSidebarFollow`, `useStoryTopicQuery`, `useDirectCallSetupQuery`,
-`xChatDmSettingsQuery`, `PremiumContentQuery`, `useFetchProductSubscriptionsQuery`,
-`CarouselQuery`, `TopicCarouselQuery`, `CommunitiesCreateButtonQuery`) plus two
-gated mutations (`CreateWebSessionBind`, `usePremiumPaywallOnLoadMutation`). Two
-operations (`GenerateXChatTokenMutation`, `GetPublicKeysQuery`) stayed `unknown`
-because their defining chunks were not among those loaded -- the correct
-fail-closed state, not a finished result. The REST surface adds six exposed reads
-and five gated writes. No X query documents, credentials, or response bodies are
-checked into this repository.
-
-Capture referenced: `chart-x.com-cc488f7e1895/` (private, gitignored). 84 records,
-strict TLS, no failures, not partial. No X query documents, credentials, or
-response bodies are checked into this repository.
 
 ## Prior effort
 
