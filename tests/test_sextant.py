@@ -2985,6 +2985,9 @@ _CAPTURE_SIDE_MODULES = frozenset(
         "capture_parallel",
         "contract_store",
         "discovery",
+        "envfile",
+        "fetch",
+        "fetch_driver",
         "mapping_mcp",
         "profile",
         "recipe",
@@ -2996,7 +2999,7 @@ _CAPTURE_SIDE_MODULES = frozenset(
     }
 )
 
-# The four operator allowlists AGENTS.md protects. They are enforced capture-side and
+# The operator allowlists AGENTS.md protects. They are enforced capture-side and
 # are read by no execution-path module; an agent that could widen its own
 # authorization envelope would make the gate meaningless.
 _CAPTURE_SIDE_ENV = (
@@ -3004,6 +3007,7 @@ _CAPTURE_SIDE_ENV = (
     "ASTROLABE_SESSION_DOMAINS",
     "ASTROLABE_CDP_ENDPOINTS",
     "ASTROLABE_BROWSER_EGRESS",
+    "ASTROLABE_ENV_FILE",
 )
 
 

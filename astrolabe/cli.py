@@ -1521,6 +1521,23 @@ def cmd_migrate_artifact(a):
     atomic_write_json(destination, migrated)
     print(f"[migrate-artifact] schema v{migrated['schema_version']} -> {destination}")
 
+def cmd_fetch(a):
+    from .fetch import FetchExit
+    from .fetch import run as run_fetch
+
+    raise FetchExit(run_fetch(a))
+
+def cmd_env(a):
+    from . import envfile
+
+    path = envfile.find_env_file(a.env_file)
+    values = envfile.relevant(envfile.resolve(a.env_file))
+    return {
+        "env_file": str(path) if path else None,
+        "warning": envfile.permissions_warning(path) if path else None,
+        "values": envfile.redacted(values),
+    }
+
 
 def build_parser():
     ap = argparse.ArgumentParser(
@@ -1888,6 +1905,25 @@ def build_parser():
     check = sub.add_parser("check", parents=[machine], help="run the complete local CI gate")
     check.set_defaults(func=cmd_check)
 
+    fetch = sub.add_parser(
+        "fetch",
+        help="fetch a page through the CloakBrowser/byparr ladder (cffetch-compatible)",
+    )
+    from .fetch import add_arguments as add_fetch_arguments
+
+    add_fetch_arguments(fetch)
+    # Deliberately no --json: this command always emits one raw JSON verdict,
+    # which is the exit-code/JSON contract its callers already depend on.
+    fetch.set_defaults(func=cmd_fetch, json=False)
+
+    env = sub.add_parser(
+        "env", parents=[machine], help="show resolved operator config with secrets masked"
+    )
+    env.add_argument(
+        "--env-file", default=None, help="read this file (default $ASTROLABE_ENV_FILE or ./.env)"
+    )
+    env.set_defaults(func=cmd_env)
+
     return ap
 
 
@@ -1995,6 +2031,11 @@ def main(argv=None):
         )
         raise SystemExit(code) from None
     except SystemExit as exc:
+        # `astrolabe fetch` owns a 0/1/2/3/4 contract that its callers depend on;
+        # remapping it onto this CLI's enum would rename a challenge a
+        # configuration error. `passthrough` is the single declared exception.
+        if getattr(exc, "passthrough", False):
+            raise SystemExit(int(exc.code)) from None
         raw_code = exc.code if isinstance(exc.code, int) else int(ExitCode.UPSTREAM)
         stable_codes = {int(value) for value in ExitCode}
         code = raw_code if raw_code in stable_codes else int(ExitCode.UPSTREAM)

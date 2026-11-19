@@ -62,6 +62,8 @@ def test_all_subcommands_registered():
         "inspect-artifact",
         "migrate-artifact",
         "check",
+        "fetch",
+        "env",
     }
 
 
