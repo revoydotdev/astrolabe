@@ -243,6 +243,47 @@ cannot combine with cookie files, native browser import, proxies, or HAR export.
 See [persisted-query recovery and payload decoding](docs/persisted-recovery.md)
 for supported packaging, evidence requirements, and limitations.
 
+### Fetching a page: `astrolabe fetch`
+
+`astrolabe fetch` is the agentic fetch ladder, ported from the standalone
+`cffetch` tool so that one project owns the browser, the solver and the egress
+policy. It fetches in CloakBrowser on the host, hands a Cloudflare challenge to
+host-side byparr (same egress IP, so the clearance cookie transfers), and
+re-fetches with the derived cookies and UA. A non-Cloudflare bot wall is
+reported as `soft_block` and names the vendor — byparr cannot clear it, so it
+is never sent there.
+
+```
+astrolabe fetch https://example.com/page \
+    [--warm https://example.com/] [--action 'click:#more'] \
+    [--out page.html] [--screenshot shot.png] [--dump-cookies cookies.json] \
+    [--capture '/api/' --capture-out responses.jsonl] [--exit-ip] \
+    [--netns [NAME]] [--proxy URL] [--resproxy --rp-state virginia] \
+    # -> one JSON verdict on stdout; exit 0 ok / 1 error / 2 egress-verify
+    #    failed / 3 challenge unresolved / 4 soft block
+```
+
+The exit codes and the JSON verdict are the contract `cffetch` callers already
+depend on, so this is a drop-in replacement. Egress selection (`--netns`,
+`--proxy`, `--resproxy`) is operator territory: it exists on the CLI, which the
+operator runs, and is never a tool argument.
+
+### Operator credentials: `.env`
+
+Residential-proxy credentials, the byparr URL and the egress-verification
+command belong in a gitignored `.env` (see `.env.example`), not in a shell
+export or a tool argument:
+
+```
+cp .env.example .env && chmod 600 .env
+astrolabe env            # resolved config, secrets masked
+```
+
+`ASTROLABE_ENV_FILE` points at a different file. The file is read only by the
+fetch path; `astrolabe env` masks every key whose name looks like a credential,
+and no MCP tool can read it.
+
+
 ### Operator configuration
 
 None of these is settable from a tool argument; each is read from the server
@@ -257,6 +298,7 @@ process, so an agent cannot widen its own authorization envelope.
 | `ASTROLABE_BROWSER_EGRESS` | `allow-third-party` | `first-party-only` aborts and records every non-first-party request |
 | `ASTROLABE_MCP_SPAWN` | unset | `1` puts every dispatched command back on one-subprocess-per-call |
 | `ASTROLABE_TOOLPACK`, `ASTROLABE_TOOLPACKS`, `ASTROLABE_COOKIES`, `ASTROLABE_AUTH` | unset | which Charts `sextant-mcp` serves, and with what credentials |
+| `ASTROLABE_ENV_FILE` | `./.env` | operator credentials for `astrolabe fetch` (residential proxy, byparr URL, egress-verify command); read by the fetch path only, never by a tool |
 | `FASTMCP_TELEMETRY_MODE` | `native` | FastMCP's OpenTelemetry instrumentation, see below |
 
 The last row is the vendor's own setting, deliberately not aliased. FastMCP 4

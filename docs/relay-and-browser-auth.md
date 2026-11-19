@@ -81,6 +81,29 @@ content can steer a browser that already holds real credentials, and the operato
 own cookies travel with any subresource the page pulls. Use `cookies_file` when the
 capture does not need the live session.
 
+### Fetching outside the capture path
+
+`astrolabe fetch` is a general-purpose fetch, not a capture: it returns a page or
+an API response to the caller and writes no chart. It is the one place where egress
+selection is a first-class option — `--netns`, `--proxy` and `--resproxy` — because
+a fetch has no target contract to be bound by. Those remain operator territory:
+they exist on the CLI the operator runs, never on a tool argument, and the MCP
+surfaces do not export a fetch tool at all.
+
+The credentials behind `--resproxy` and the challenge solver come from a gitignored
+`.env` (template: `.env.example`), read by `astrolabe/envfile.py`. The file's values
+are returned as a dict and are never written into `os.environ`, so a credential
+loaded for one command cannot leak into another module's ambient environment; no
+tool can read the file; and `tests/test_sextant.py` asserts that `envfile`, `fetch`
+and `fetch_driver` are unreachable from the execution closure. `astrolabe env` is
+the inspection command: it prints only astrolabe-namespaced keys and masks any name
+that looks like a credential.
+
+Read together with the policy above: `ASTROLABE_BROWSER_EGRESS` says what a
+*capture* browser may reach, while `astrolabe fetch` egress flags say where a
+*standalone* fetch goes. Neither is settable from a tool argument, and a fetch
+never widens what a capture is allowed to do.
+
 ## Dispatch isolation
 
 `map_site`, `verify_chart` and `import_har` shell out to `python -m

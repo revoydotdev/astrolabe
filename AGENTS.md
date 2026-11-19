@@ -71,6 +71,16 @@ tool argument may select or widen any of them. An agent able to widen its own
 authorization envelope makes the gate meaningless, and a comment saying so is not a
 control — there is a test that asserts each tool's input schema omits these.
 
+`astrolabe fetch` reads credentials from a gitignored `.env` (`astrolabe/envfile.py`,
+template in `.env.example`): residential-proxy user/pass, the byparr URL, the
+egress-verify command. That file is operator config with the same standing as the
+environment. Three properties are enforced, not promised: the value is returned as a
+dict and never written into `os.environ`, no MCP tool exposes or reads it, and
+`tests/test_sextant.py` lists `envfile`/`fetch`/`fetch_driver` and
+`ASTROLABE_ENV_FILE` among the things the execution closure may not reach.
+`astrolabe env` prints only `ASTROLABE_`/`BASTILLE_`/`CLOAKBROWSER_`/`BYPARR_`/
+`CFFETCH_` keys and masks any name that looks like a credential.
+
 ## Lint debt shrinks, never grows
 
 `pyproject.toml:94-96`: the ruff per-file-ignore list is an inherited baseline.
