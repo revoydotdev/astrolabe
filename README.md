@@ -357,7 +357,7 @@ astrolabe contract <capture-dir> \        # versioned typed inventory + observat
 astrolabe mcp-gen <capture-dir> \         # generate a typed MCP toolpack from a capture
     --overrides surfaces                    # use curated minimal queries where available
     # -> toolpack.json: typed tools only for safely classified, runtime-compatible ops.
-    # Serve with `astrolabe-mcp` (FastMCP; env: ASTROLABE_TOOLPACK/COOKIES/AUTH).
+    # Serve with `sextant-mcp` (FastMCP; env: ASTROLABE_TOOLPACK/COOKIES/AUTH).
 
 astrolabe replay example.com --op op.json \   # browserless, TLS-matched, high-frequency replay
     --cookies-file cookies.json --auth-file auth.map.json \  # both bring-your-own

@@ -25,6 +25,21 @@ already say we cannot defend. The delta is spelled out, once, in
 [Agent-held sessions](#agent-held-sessions); the rest of this document's
 limitations apply to it unchanged.
 
+The same shape gates the two other operator-owned ingresses. `map_site` and
+`verify_chart` accept a `cdp_endpoint` only if the exact loopback endpoint is
+listed in `ASTROLABE_CDP_ENDPOINTS`, and `register_session` may store a credential
+for a domain only if that exact domain is listed in `ASTROLABE_SESSION_DOMAINS`.
+Both allowlists are empty by default and no tool argument can widen either one.
+
+`ASTROLABE_SESSION_DOMAINS` exists because the agent is now a credential
+*origin*, not only a credential consumer. Every other path here starts with
+something the operator already staged; this one lets the caller decide when a
+secret enters the system, which puts the agent's own process, its memory, and its
+transcript in scope, and those are exactly the surfaces the concessions below
+already say we cannot defend. The delta is spelled out, once, in
+[Agent-held sessions](#agent-held-sessions); the rest of this document's
+limitations apply to it unchanged.
+
 Import reads only the selected current-user profile and registrable domain using
 read-only SQLite. Public suffixes, symlinked paths, wrong owners, unsupported
 encryption, invalid padding and failed modern host binding are rejected. Only
