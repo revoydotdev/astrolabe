@@ -50,6 +50,16 @@
       "response_media_types": [
         "application/json"
       ],
+      "response_shape": {
+        "data": {
+          "addToCart": {
+            "line": {
+              "qty": "int"
+            },
+            "ok": "bool"
+          }
+        }
+      },
       "return_schema": {
         "properties": {
           "addToCart": {
@@ -1162,6 +1172,17 @@
       "response_media_types": [
         "application/json"
       ],
+      "response_shape": {
+        "data": {
+          "product": {
+            "id": "str",
+            "name": "str",
+            "vendor": {
+              "id": "str"
+            }
+          }
+        }
+      },
       "return_schema": {
         "properties": {
           "product": {
@@ -1295,6 +1316,13 @@
       "response_media_types": [
         "application/json"
       ],
+      "response_shape": {
+        "data": {
+          "viewer": {
+            "id": "str"
+          }
+        }
+      },
       "return_schema": null,
       "semantic_kind": "query",
       "status": "typed-unproven",

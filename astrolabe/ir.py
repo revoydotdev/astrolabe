@@ -314,6 +314,12 @@ class Operation:
     proof_ids: list[str]
     credential_scope_ids: list[str]
     lifecycle: Lifecycle
+    # raw response body shape captured from a representative observation;
+    # primitive values are retained at the default `values` fidelity (credentials
+    # masked) or `raw`, and collapsed to type names at `shape`. None or absent
+    # otherwise. downstream consumers (contract, mcp-gen) read this via the
+    # inventory's per-op dict, not the typed schema.
+    response_shape: Any | None = None
     field_evidence: dict[str, list[FieldEvidence]] = field(default_factory=dict)
     conflicts: list[Conflict] = field(default_factory=list)
 
@@ -510,6 +516,7 @@ def graph_from_inventory(
             output_schema_ids=[],
             proof_ids=[],
             credential_scope_ids=[],
+            response_shape=raw.get("response_shape"),
             lifecycle=Lifecycle(
                 first_seen_at=started,
                 last_seen_at=str(completed) if completed else None,
@@ -1338,6 +1345,7 @@ def inventory_from_graph(graph: dict[str, Any]) -> dict[str, Any]:
             "operation": (operation.get("operation_names") or [None])[0],
             "persistedHash": current.get("value") if current else None,
             "input_schema": input_document,
+            "response_shape": operation.get("response_shape"),
             "calls": (operation.get("lifecycle") or {}).get("observation_count", 0),
             "status": statuses,
             "response_kinds": response_kinds,

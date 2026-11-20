@@ -16,7 +16,11 @@ def sanitize_record(record: dict[str, Any]) -> dict[str, Any]:
     cleaned = dict(record)
     sample = cleaned.pop("req_body_sample", None)
     if sample is not None:
-        cleaned.update(request_metadata(sample, cleaned.get("request_media_type", "")))
+        # This migrator exists to strip values from legacy captures, so it always
+        # forces the value-free boundary regardless of the process fidelity setting.
+        cleaned.update(
+            request_metadata(sample, cleaned.get("request_media_type", ""), fidelity="shape")
+        )
     if isinstance(cleaned.get("url"), str):
         cleaned["url"] = safe_url(cleaned["url"])
     return cleaned

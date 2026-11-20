@@ -1346,3 +1346,36 @@ def test_gated_pack_still_validates(tmp_path):
     pack = build_pack(str(tmp_path))
     _validate_pack(pack, Settings(tmp_path / "toolpack.json"))
     assert pack["tools"][0]["exposed"] is False
+
+
+def test_rest_tools_keep_the_observed_origin_not_the_registrable_base(tmp_path) -> None:
+    # www.example.com and example.com are different origins; the bare base often 301s,
+    # which the runtime (correctly) refuses to follow with credentials attached.
+    _write_capture(
+        tmp_path,
+        gql_ops={},
+        endpoints=[],
+        rest=[
+            {
+                "method": "GET",
+                "path": "/api/v1/media/{id}/info/",
+                "request_url": "https://www.example.com/api/v1/media/{id}/info/",
+                "calls": 2,
+                "status": [200],
+            }
+        ],
+    )
+    # Generation reads graph.json when present, so exercise that round trip: the graph
+    # keeps the origin, and the toolpack must not drop it on the way out.
+    from astrolabe.ir import graph_from_inventory, write_graph
+
+    inventory = json.loads((tmp_path / "endpoints.json").read_text())
+    records = [json.loads(line) for line in (tmp_path / "capture.jsonl").read_text().splitlines()]
+    write_graph(
+        str(tmp_path / "graph.json"),
+        graph_from_inventory(inventory, records, {"base_domain": "example.com"}),
+    )
+    pack = build_pack(str(tmp_path))
+    tool = {t["name"]: t for t in pack["tools"]}["getApiV1MediaIdInfo"]
+    assert tool["request_url"] == "https://www.example.com/api/v1/media/{id}/info/"
+    assert tool["exposed"] is True

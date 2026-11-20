@@ -465,6 +465,12 @@ def build(recs, meta):
             rs = r.get("resp_shape")
             if isinstance(rs, dict) and isinstance(rs.get("data"), dict):
                 d["returns"].update(rs["data"].keys())
+            # retain the full response shape so the contract and toolpack can
+            # surface values. value-retention happens earlier in structural_shape();
+            # at the default `values` fidelity primitives are kept with credentials
+            # masked, `shape` collapses them to type names, `raw` keeps them verbatim.
+            if isinstance(rs, dict):
+                d["response_shape"] = rs
 
     def eligible_rest(record):
         kind = (
@@ -495,9 +501,19 @@ def build(recs, meta):
         key = (r["method"], templater.apply_path(path))
         e = rest.setdefault(
             key,
-            {"n": 0, "hdr": {}, "status": set(), "response_kinds": set(), "media_types": set()},
+            {
+                "n": 0,
+                "hdr": {},
+                "status": set(),
+                "response_kinds": set(),
+                "media_types": set(),
+                "origins": set(),
+            },
         )
         e["n"] += 1
+        parts = up.urlsplit(r["url"])
+        if parts.scheme and parts.netloc:
+            e["origins"].add(f"{parts.scheme}://{parts.netloc}")
         e["status"].add(r["status"])
         e["response_kinds"].add(
             r.get("response_kind") or classify_media(r.get("resp_ct"), r.get("rtype")).value
@@ -665,6 +681,7 @@ def render(outdir, recs, meta, *, prior_graph=None):
                 "returns": sorted(v["returns"]),
                 "input_shape": v["input_shape"],
                 "input_schema": input_schema(v),
+                "response_shape": v.get("response_shape"),
                 "persistedHash": v["hash"],
                 "calls": v["count"],
             }
@@ -690,6 +707,13 @@ def render(outdir, recs, meta, *, prior_graph=None):
                 "status": sorted(e["status"]),
                 "response_kinds": sorted(e["response_kinds"]),
                 "response_media_types": sorted(e["media_types"]),
+                # The observed host, not the registrable base: www.example.com and
+                # example.com are different origins, and the bare one often redirects.
+                **(
+                    {"request_url": next(iter(e["origins"])) + p}
+                    if len(e.get("origins") or ()) == 1
+                    else {}
+                ),
             }
             for (m, p), e in rest.items()
         ],

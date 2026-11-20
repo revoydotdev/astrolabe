@@ -4,8 +4,12 @@ API surface. Standalone: runs on the pipeline host in the cloakbrowser venv.
 Stdlib + cloakbrowser only.
 
 Emits into --outdir:
-  capture.jsonl     request/response *shapes* (PII-safe: no response values, no token values)
+  capture.jsonl     request/response shapes. At the default `values` fidelity primitive
+                   values are retained in request_shape/resp_shape with credentials
+                   masked (bounded by depth/keys/array caps); `shape` collapses them to
+                   type names; `raw` keeps them verbatim. Set ASTROLABE_CAPTURE_FIDELITY.
   capture.har       full HAR (feeds har-to-openapi)  [--har]
+                   at `raw` fidelity the HAR is also pulled into the chart dir.
   graphql-names.txt GraphQL operation/field/type names (clairvoyance -w wordlist)
   meta.json         graphql endpoints, auth-header model, CF/byparr events, introspection result
 
@@ -135,6 +139,49 @@ def is_auth_header(name, extra_names=(), pattern=AUTH_HEADER_PATTERN_DEFAULT):
     return bool(pattern.search(n))
 
 
+_COOKIE_BOOL_FIELDS = ("httpOnly", "secure", "session", "hostOnly")
+_SAMESITE_OK = {"Strict", "Lax", "None"}
+
+
+def _coerce_samesite(v):
+    if not isinstance(v, str):
+        return v
+    s = v.strip()
+    if s in _SAMESITE_OK:
+        return s
+    low = s.lower()
+    if low in ("strict",):
+        return "Strict"
+    if low in ("lax",):
+        return "Lax"
+    if low in ("none", "no_restriction", "unspecified"):
+        return "None"
+    return "Lax"
+
+
+def normalize_cookies(cookies):
+    """Force boolean fields to real booleans and sameSite to the playwright
+    enum. Some serialization paths (mcp/pydantic round-trips, hand-typed
+    JSON) store httpOnly/secure/session/hostOnly as "true"/"false" and
+    sameSite as "no_restriction"/"unspecified". Playwright rejects both."""
+    out = []
+    for cookie in cookies or ():
+        if not isinstance(cookie, dict):
+            continue
+        fixed = dict(cookie)
+        for field in _COOKIE_BOOL_FIELDS:
+            if field in fixed and not isinstance(fixed[field], bool):
+                v = fixed[field]
+                if isinstance(v, str):
+                    fixed[field] = v.strip().lower() in ("true", "1", "yes")
+                else:
+                    fixed[field] = bool(v)
+        if "sameSite" in fixed:
+            fixed["sameSite"] = _coerce_samesite(fixed["sameSite"])
+        out.append(fixed)
+    return out
+
+
 def is_secret_header(name):
     """Is `name` secret-bearing (must never have its real value persisted)?"""
     return bool(SECRET_HEADER_PATTERN.search(name.lower()))
@@ -187,9 +234,14 @@ SHAPE_TRUNCATIONS: dict[str, int] = {}
 
 
 def shape(v, d=0):
-    limits = dict(SHAPE_LIMITS)
-    limits["max_depth"] = max(0, limits["max_depth"] - d)
-    return structural_shape(v, counters=SHAPE_TRUNCATIONS, **limits)
+    return structural_shape(
+        v,
+        counters=SHAPE_TRUNCATIONS,
+        max_depth=max(0, SHAPE_LIMITS["max_depth"] - d),
+        max_nodes=SHAPE_LIMITS["max_nodes"],
+        max_keys=SHAPE_LIMITS["max_keys"],
+        max_array_samples=SHAPE_LIMITS["max_array_samples"],
+    )
 
 
 def graphql_entries(payload, live_url, media_type):
@@ -271,8 +323,13 @@ def response_payload(response, max_bytes, *, graphql=False):
     """Never wait for an unbounded stream or parse document/static responses as APIs."""
     media_type = response.headers.get("content-type", "")
     kind = media_type.split(";", 1)[0].lower()
-    if kind in {"text/event-stream", "text/html"} or (
-        not graphql and kind in {"application/javascript", "text/javascript"}
+    # GraphQL is routinely JSON served under a document/script MIME: Facebook labels
+    # its /api/graphql/ responses `text/html`, others use application/javascript.
+    # Transport evidence, not MIME alone, authorizes parsing (see the call site), so
+    # these document/script types are refused only without a GraphQL signal.
+    # text/event-stream is always an unbounded stream we must never block on.
+    if kind == "text/event-stream" or (
+        not graphql and kind in {"text/html", "application/javascript", "text/javascript"}
     ):
         return None
     request = getattr(response, "request", None)
@@ -1001,7 +1058,7 @@ def main(argv=None):
     except Exception as exc:
         record_failure("service-worker", "browser", exc)
     if a.cookies:
-        ctx.add_cookies(json.load(open(a.cookies)))
+        ctx.add_cookies(normalize_cookies(json.load(open(a.cookies))))
 
     def on_response(resp):
         if jf.closed:

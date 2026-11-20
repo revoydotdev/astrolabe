@@ -28,7 +28,10 @@ async def test_native_map_uses_export_and_recovery_without_exposing_secrets(tmp_
         return Process()
 
     monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
-    monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
+    monkeypatch.setattr(
+        "astrolabe.mapping_mcp.dispatch_in_process",
+        _generating_cli(dispatched),
+    )
     cookies = tmp_path / "cookies.json"
     cookies.write_text('[{"value":"credential-secret"}]')
     cookies.chmod(0o600)
@@ -137,7 +140,7 @@ async def test_native_browser_import_is_forwarded_to_capture(tmp_path, monkeypat
 
     monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", subprocess)
     monkeypatch.setattr("astrolabe.mapping_mcp.dispatch_in_process", _in_process_cli(dispatched))
-    async with Client(create_server(tmp_path, browser_auth_domains=frozenset({"x.com"}))) as client:
+    async with Client(create_server(tmp_path)) as client:
         result = await client.call_tool(
             "map_site",
             {
@@ -155,7 +158,7 @@ async def test_native_browser_import_is_forwarded_to_capture(tmp_path, monkeypat
     assert capture[capture.index("--profile") + 1] == "Profile 1"
     assert "--cookies-file" not in capture
     assert "--no-auth" not in capture
-    assert "--recover-persisted" not in capture
+    assert "--recover-persisted" in capture
     assert capture[capture.index("--crawl") + 1] == "4"
     assert "--block-assets" in capture
     assert "--include-mutations" in dispatched[0][0]
@@ -189,20 +192,6 @@ async def test_generate_chart_mutations_require_explicit_opt_in(tmp_path, monkey
     assert "--include-mutations" in dispatched[1][0]
 
 
-@pytest.mark.asyncio
-async def test_browser_import_disabled_by_default_and_exact_domain_only(tmp_path, monkeypatch):
-    monkeypatch.delenv("ASTROLABE_BROWSER_AUTH_DOMAINS", raising=False)
-
-    async def forbidden(*args, **kwargs):
-        pytest.fail("unauthorized browser import reached subprocess")
-
-    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", forbidden)
-    for allowed, domain in [(None, "x.com"), (frozenset({"x.com"}), "api.x.com")]:
-        async with Client(create_server(tmp_path, browser_auth_domains=allowed)) as client:
-            with pytest.raises(ToolError):
-                await client.call_tool("map_site", {"domain": domain, "browser": "vivaldi"})
-
-
 def _recording_subprocess(calls, envelopes=None, on_call=None):
     envelopes = list(envelopes or [])
 
@@ -221,6 +210,21 @@ def _recording_subprocess(calls, envelopes=None, on_call=None):
         return Process(envelopes.pop(0) if envelopes else {"ok": True})
 
     return subprocess
+
+
+def _generating_cli(calls):
+    """An in-process CLI double that also creates the chart directory it is asked to fill.
+
+    The real generator writes the Chart, and the server then drops a credential pointer
+    into it, so a double that skips the directory makes that write fail for the wrong reason.
+    """
+    base = _in_process_cli(calls)
+
+    def dispatch(arguments, *, cwd):
+        Path(arguments[1]).mkdir(parents=True, exist_ok=True)
+        return base(arguments, cwd=cwd)
+
+    return dispatch
 
 
 def _in_process_cli(calls, envelope: dict | None = None, code: int = 0):
@@ -245,13 +249,7 @@ async def test_refusal_reasons_reach_the_caller(tmp_path, monkeypatch):
         "astrolabe.mapping_mcp.asyncio.create_subprocess_exec",
         _recording_subprocess([]),
     )
-    async with Client(create_server(tmp_path, cdp_endpoints=frozenset())) as client:
-        with pytest.raises(ToolError, match="ASTROLABE_CDP_ENDPOINTS"):
-            await client.call_tool(
-                "map_site", {"domain": "example.com", "cdp_endpoint": "http://127.0.0.1:9222"}
-            )
-        with pytest.raises(ToolError, match="ASTROLABE_BROWSER_AUTH_DOMAINS"):
-            await client.call_tool("map_site", {"domain": "example.com", "browser": "chrome"})
+    async with Client(create_server(tmp_path)) as client:
         with pytest.raises(ToolError, match="action 0 key must be one of"):
             await client.call_tool(
                 "map_site",
@@ -343,12 +341,12 @@ async def test_cli_failure_message_and_log_are_returned(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_operator_allowed_cdp_endpoint_is_forwarded(tmp_path, monkeypatch):
+async def test_loopback_cdp_endpoint_is_forwarded(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "astrolabe.mapping_mcp.asyncio.create_subprocess_exec", _recording_subprocess(calls)
     )
-    server = create_server(tmp_path, cdp_endpoints=frozenset({"http://127.0.0.1:9222"}))
+    server = create_server(tmp_path)
     async with Client(server) as client:
         await client.call_tool(
             "map_site", {"domain": "example.com", "cdp_endpoint": "http://127.0.0.1:9222"}
@@ -358,9 +356,19 @@ async def test_operator_allowed_cdp_endpoint_is_forwarded(tmp_path, monkeypatch)
     assert "--no-auth" not in capture and "--cookies-file" not in capture
 
 
-def test_non_loopback_operator_cdp_endpoint_is_rejected_at_startup(tmp_path):
-    with pytest.raises(ValueError):
-        create_server(tmp_path, cdp_endpoints=frozenset({"http://192.168.1.5:9222"}))
+@pytest.mark.asyncio
+async def test_non_loopback_cdp_endpoint_is_refused_without_any_allowlist(tmp_path, monkeypatch):
+    """No operator list gates CDP any more, but the loopback rule still holds."""
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("a non-loopback cdp endpoint reached the subprocess")
+
+    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", forbidden)
+    async with Client(create_server(tmp_path)) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "map_site", {"domain": "example.com", "cdp_endpoint": "http://192.168.1.5:9222"}
+            )
 
 
 @pytest.mark.asyncio
@@ -439,7 +447,7 @@ async def test_both_browser_consuming_tools_refuse_the_same_bad_source(tmp_path,
             ("map_site", {"domain": "example.com"}),
             ("verify_chart", {"capture_directory": chart.name}),
         ):
-            server = create_server(tmp_path, browser_auth_domains=frozenset({"example.com"}))
+            server = create_server(tmp_path)
             async with Client(server) as client:
                 with pytest.raises(ToolError) as excinfo:
                     await client.call_tool(tool, {**target, **source})
@@ -449,27 +457,6 @@ async def test_both_browser_consuming_tools_refuse_the_same_bad_source(tmp_path,
             "browser profile name" in messages["map_site"]
             or "must be one of" in (messages["map_site"])
         )
-
-
-@pytest.mark.asyncio
-async def test_browser_import_is_refused_at_the_mcp_layer_for_both_tools(tmp_path, monkeypatch):
-    """The operator allowlist is enforced where the tool is called, not downstream."""
-    chart = tmp_path / "chart-example.com-1"
-    chart.mkdir()
-    (chart / "endpoints.json").write_text('{"base_domain": "example.com"}')
-
-    async def forbidden(*args, **kwargs):
-        pytest.fail("an unauthorized browser import reached the subprocess")
-
-    monkeypatch.setattr("astrolabe.mapping_mcp.asyncio.create_subprocess_exec", forbidden)
-    for tool, extra in (
-        ("map_site", {"domain": "example.com"}),
-        ("verify_chart", {"capture_directory": chart.name}),
-    ):
-        server = create_server(tmp_path, browser_auth_domains=frozenset({"other.com"}))
-        async with Client(server) as client:
-            with pytest.raises(ToolError, match="ASTROLABE_BROWSER_AUTH_DOMAINS"):
-                await client.call_tool(tool, {**extra, "browser": "vivaldi", "profile": "Default"})
 
 
 @pytest.mark.asyncio
@@ -543,14 +530,14 @@ async def _register(server, **overrides) -> dict:
 
 @pytest.mark.asyncio
 async def test_register_session_refuses_an_empty_session(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    server = create_server(tmp_path)
     with pytest.raises(ToolError, match="at least one of cookies or headers"):
         await _register(server, cookies=[], headers={})
 
 
 @pytest.mark.asyncio
 async def test_register_session_refuses_an_oversized_value(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    server = create_server(tmp_path)
     huge = "v" * 9000
     with pytest.raises(ToolError, match="exceeds the maximum length"):
         await _register(server, cookies=[], headers={"x-big": huge})
@@ -560,7 +547,7 @@ async def test_register_session_refuses_an_oversized_value(tmp_path):
 @pytest.mark.asyncio
 async def test_register_session_label_is_length_and_charset_constrained(tmp_path):
     """A label is agent-supplied free text that gets stored, so it is constrained."""
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    server = create_server(tmp_path)
     with pytest.raises(ToolError, match="label must be"):
         await _register(server, label="<script>alert(1)</script>")
     with pytest.raises(ToolError, match="label must be"):
@@ -598,13 +585,11 @@ async def test_map_site_uses_a_session_handle_without_putting_it_on_argv(tmp_pat
     through ps, so a handle there is a world-readable bearer token for the run."""
     from astrolabe.mapping_mcp import _session_stem
 
-    gated = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    gated = create_server(tmp_path)
     response = await _register(gated)
     handle = response["handle"]
     calls = _argv_capture(monkeypatch)
-    async with Client(
-        create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    ) as client:
+    async with Client(create_server(tmp_path)) as client:
         await client.call_tool("map_site", {"domain": "example.com", "session": handle})
     assert calls, "no subprocess was invoked"
     argv = [str(part) for part in calls[0]]
@@ -624,9 +609,7 @@ async def test_session_argv_matches_a_staged_cookies_file(tmp_path, monkeypatch)
     staged.write_text("[]")
     staged.chmod(0o600)
     from_session = _argv_capture(monkeypatch)
-    async with Client(
-        create_server(tmp_path, session_domains=frozenset({"example.com"}))
-    ) as client:
+    async with Client(create_server(tmp_path)) as client:
         handle = (
             await client.call_tool(
                 "register_session",
@@ -666,7 +649,7 @@ async def test_session_argv_matches_a_staged_cookies_file(tmp_path, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_session_with_another_source_is_refused_naming_all_four(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    server = create_server(tmp_path)
     response = await _register(server)
     handle = response["handle"]
     for other in (
@@ -686,7 +669,7 @@ async def test_session_with_another_source_is_refused_naming_all_four(tmp_path):
 
 @pytest.mark.asyncio
 async def test_unknown_and_path_like_handles_are_refused(tmp_path):
-    server = create_server(tmp_path, session_domains=frozenset({"example.com"}))
+    server = create_server(tmp_path)
     for bad in ("../../etc/passwd", "not-a-real-handle", "", "a" * 500):
         async with Client(server) as client:
             with pytest.raises(ToolError) as excinfo:
@@ -696,15 +679,6 @@ async def test_unknown_and_path_like_handles_are_refused(tmp_path):
 
 
 # ----- session lifecycle: env allowlist, expiry, revocation ------------------
-
-
-@pytest.mark.asyncio
-async def test_unset_allowlist_refuses_every_domain(tmp_path, monkeypatch):
-    monkeypatch.delenv("ASTROLABE_SESSION_DOMAINS", raising=False)
-    server = create_server(tmp_path)
-    for domain in ("example.com", "other.test", "a.b.c.example"):
-        with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
-            await _register(server, domain=domain)
 
 
 # ----- scan_site: the authorization envelope is not a tool argument -----------
@@ -1420,3 +1394,31 @@ async def test_a_cancelled_capture_terminates_its_child_and_cleans_up(tmp_path, 
     assert state["killed"] is False, "a child that honoured terminate was also killed"
     assert result.data["ok"] is True
     assert result.data["result"]["probe"] == _PREFLIGHT_STUB
+
+
+# --- agent-entrypoint capture fidelity (replaces the binary firewall) --------
+
+
+def test_capture_env_defaults_map_to_redacted_values(monkeypatch):
+    from astrolabe.mapping_mcp import _capture_env
+
+    monkeypatch.delenv("ASTROLABE_CAPTURE_FIDELITY", raising=False)
+    monkeypatch.delenv("ASTROLABE_DEVELOPER_MODE", raising=False)
+    # The agent-facing `map` capture opts into values so the agent can read what it
+    # mapped; everything else keeps the shape-only default.
+    assert _capture_env("map")["ASTROLABE_CAPTURE_FIDELITY"] == "values"
+    assert "ASTROLABE_CAPTURE_FIDELITY" not in _capture_env("import-har")
+    assert "ASTROLABE_CAPTURE_FIDELITY" not in _capture_env("scan")
+    assert "ASTROLABE_CAPTURE_FIDELITY" not in _capture_env("verify")
+
+
+def test_capture_env_never_overrides_operator_choice(monkeypatch):
+    from astrolabe.mapping_mcp import _capture_env
+
+    monkeypatch.setenv("ASTROLABE_CAPTURE_FIDELITY", "shape")
+    assert _capture_env("map")["ASTROLABE_CAPTURE_FIDELITY"] == "shape"
+
+    monkeypatch.delenv("ASTROLABE_CAPTURE_FIDELITY", raising=False)
+    monkeypatch.setenv("ASTROLABE_DEVELOPER_MODE", "1")
+    # Legacy raw flag set: the entrypoint must not downgrade it to values.
+    assert _capture_env("map").get("ASTROLABE_CAPTURE_FIDELITY") != "values"

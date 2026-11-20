@@ -32,11 +32,10 @@ COOKIE: dict[str, Any] = {
     "domain": "example.com",
     "path": "/",
 }
-GATED = frozenset({"example.com", "other.test"})
 
 
-def _server(tmp_path: Path, domains: frozenset[str] = GATED):
-    return create_server(tmp_path, session_domains=domains)
+def _server(tmp_path: Path):
+    return create_server(tmp_path)
 
 
 async def _register(server, **overrides) -> dict:
@@ -273,32 +272,16 @@ async def test_revoke_does_not_echo_the_handle(tmp_path):
     assert handle not in json.dumps(revoked), "revoke echoed a bearer token"
 
 
-# ----- the operator allowlist ------------------------------------------------
+# ----- domain binding -------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_allowlist_refuses_every_domain_when_env_is_unset(tmp_path, monkeypatch):
-    monkeypatch.delenv("ASTROLABE_SESSION_DOMAINS", raising=False)
-    server = create_server(tmp_path)
+async def test_any_domain_registers_without_an_operator_allowlist(tmp_path, monkeypatch):
+    """The operator gate is gone: registration no longer depends on any env var."""
     for domain in ("example.com", "other.test", "deep.sub.example.com"):
-        with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
-            await _register(server, domain=domain)
-
-
-@pytest.mark.asyncio
-async def test_allowlist_permits_an_exact_domain_from_the_env(tmp_path, monkeypatch):
-    """F-22: the env path with a non-empty value that SUCCEEDS."""
-    monkeypatch.setenv("ASTROLABE_SESSION_DOMAINS", "example.com")
-    response = await _register(create_server(tmp_path))
-    assert response["ok"] is True
-    assert response["cookie_names"] == ["sid"]
-
-
-@pytest.mark.asyncio
-async def test_allowlist_is_exact_not_a_suffix_match(tmp_path, monkeypatch):
-    monkeypatch.setenv("ASTROLABE_SESSION_DOMAINS", "sub.example.com")
-    with pytest.raises(ToolError, match="ASTROLABE_SESSION_DOMAINS"):
-        await _register(create_server(tmp_path), domain="example.com")
+        response = await _register(create_server(tmp_path), domain=domain)
+        assert response["ok"] is True
+        assert response["cookie_names"] == ["sid"]
 
 
 @pytest.mark.asyncio

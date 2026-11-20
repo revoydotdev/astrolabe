@@ -731,6 +731,20 @@ def build_rest_tools(
             }
             if params:
                 schema["required"] = params
+        elif ep.get("source") != "openapi":
+            # A capture-derived schema describes the observed query/body only; its
+            # path placeholders still have to be bindable, or every templated read
+            # (e.g. /media/{id}/info/) is gated as unsatisfiable.
+            schema = {**schema, "properties": dict(schema["properties"])}
+            required = list(schema.get("required") or [])
+            for p in PATH_PARAM.findall(path):
+                schema["properties"].setdefault(
+                    p, {"type": "string", "description": f"path parameter {{{p}}}"}
+                )
+                if p not in required:
+                    required.append(p)
+            if required:
+                schema["required"] = required
 
         attested_read = bool(ep.get("read_only_attested"))
         op_type = "query" if attested_read else classify_rest(method, path, read_pattern)
@@ -797,7 +811,10 @@ def build_rest_tools(
                 ),
                 "method": method,
                 "path": path,
-                "request_url": ep.get("request_url"),
+                # The observed origin (www.example.com), not the registrable base the
+                # runtime would otherwise fall back to and which often just redirects.
+                "request_url": ep.get("request_url")
+                or (f"{ep['origin']}{path}" if ep.get("origin") else None),
                 "servers": ep.get("servers") or [],
                 "parameters": ep.get("parameters") or [],
                 "body_media_type": ep.get("body_media_type"),

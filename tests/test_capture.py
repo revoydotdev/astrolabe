@@ -632,6 +632,22 @@ def test_graphql_json_in_javascript_media_type_is_decoded(capture):
     assert decoded.value == {"data": {"viewer": {"id": "private"}}}
 
 
+def test_graphql_json_served_as_text_html_is_decoded(capture):
+    """Facebook serves /api/graphql/ responses under content-type text/html. Transport
+    evidence, not MIME, authorizes parsing: without the graphql signal a text/html body
+    is a document and is skipped; with it, the JSON is decoded."""
+
+    class Response:
+        headers = {"content-type": 'text/html; charset="utf-8"'}
+
+        def body(self):
+            return b'{"data":{"node":{"activity_log_stories":{"edges":[]}}}}'
+
+    assert capture.response_payload(Response(), 10000) is None
+    decoded = capture.response_payload(Response(), 10000, graphql=True)
+    assert decoded.value == {"data": {"node": {"activity_log_stories": {"edges": []}}}}
+
+
 def test_plain_text_body_is_not_a_decode_failure(capture):
     class Properties:
         headers = {"content-type": "text/plain;charset=UTF-8"}

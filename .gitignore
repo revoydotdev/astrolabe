@@ -1,5 +1,7 @@
 # secrets / live session material — NEVER commit
 cookies*.json
+*_cookies.json
+.*cookies*.json
 auth*.json
 auth.map.json
 *.har
@@ -42,3 +44,5 @@ build/
 
 # per-domain contract of record
 .astrolabe/
+.x-replay/
+.omo/

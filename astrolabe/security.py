@@ -13,6 +13,7 @@ import json
 import os
 import re
 import socket
+import sys
 import tempfile
 import urllib.parse as up
 import zlib
@@ -290,6 +291,73 @@ def validate_url(
     return up.urlunsplit((parsed.scheme.lower(), netloc, path, parsed.query, ""))
 
 
+# Capture fidelity: how much of each request/response value a chart retains. The
+# data-visibility boundary used to be binary -- blank every value to a type name,
+# or (ASTROLABE_DEVELOPER_MODE) retain everything including raw tokens and pull the
+# HAR + cookie jar into the chart dir. That binary made the default useless to the
+# agent that produced the chart: it could not read the data it had just mapped. The
+# three levels below replace it.
+#   shape  -- value-free structural shapes only (type names). The original boundary;
+#             still available for sharing a chart whose data must not leave the host.
+#   values -- retain primitive values but mask credentials by field name/pattern
+#             (cookie, token, authorization, secret, session, ...). The default:
+#             the mapped data is readable, auth material is not written to disk.
+#   raw    -- retain everything verbatim, no redaction, and (via the CLI) pull the
+#             full HAR + cookies.json + auth.headers.json into the chart dir. The
+#             chart dir becomes a live credential artifact. Opt-in footgun only.
+CAPTURE_SHAPE = "shape"
+CAPTURE_VALUES = "values"
+CAPTURE_RAW = "raw"
+CAPTURE_FIDELITIES = (CAPTURE_SHAPE, CAPTURE_VALUES, CAPTURE_RAW)
+CAPTURE_FIDELITY_ENV = "ASTROLABE_CAPTURE_FIDELITY"
+
+
+def capture_fidelity() -> str:
+    """Resolve the capture fidelity level, honoring the legacy developer-mode flag.
+
+    Unset defaults to ``shape``: the value-free boundary still holds for every
+    library caller, the legacy capture sanitizer, and any command that does not opt
+    in. The agent-facing ``map`` entrypoint sets ``ASTROLABE_CAPTURE_FIDELITY=values``
+    for its own capture subprocess (``mapping_mcp``), so an agent reads the surface it
+    just mapped while nothing else changes. ``ASTROLABE_CAPTURE_FIDELITY`` selects a
+    level explicitly; the legacy ``ASTROLABE_DEVELOPER_MODE=1`` still means ``raw``.
+    An unrecognized value is an error rather than a silent fallback, matching
+    ``egress_policy()`` -- a typo must not quietly change what lands on disk.
+    """
+    raw_env = (os.environ.get(CAPTURE_FIDELITY_ENV) or "").strip().lower()
+    if raw_env:
+        if raw_env not in CAPTURE_FIDELITIES:
+            raise ValueError(
+                f"{CAPTURE_FIDELITY_ENV} must be one of {list(CAPTURE_FIDELITIES)}, not {raw_env!r}"
+            )
+        return raw_env
+    if os.environ.get("ASTROLABE_DEVELOPER_MODE"):
+        return CAPTURE_RAW
+    return CAPTURE_SHAPE
+
+
+def retain_values() -> bool:
+    """True when captured primitive values are kept (``values`` or ``raw``)."""
+    return capture_fidelity() in (CAPTURE_VALUES, CAPTURE_RAW)
+
+
+def retain_raw() -> bool:
+    """True only in ``raw`` mode: no redaction, credential artifacts pulled to disk."""
+    return capture_fidelity() == CAPTURE_RAW
+
+
+# Back-compat alias for call sites that gate the raw credential-dump path.
+DEVELOPER_MODE = retain_raw()
+if retain_raw():
+    print(
+        "\n!!! astrolabe capture fidelity = raw !!!\n"
+        "    request and response bodies retain their values verbatim (PII + tokens).\n"
+        "    the full HAR + cookies.json + auth.headers.json will be pulled into the chart dir.\n"
+        "    the chart dir is now a credential artifact. treat it as such.\n",
+        file=sys.stderr,
+    )
+
+
 def structural_shape(
     value: Any,
     *,
@@ -298,8 +366,27 @@ def structural_shape(
     max_keys: int = 200,
     max_array_samples: int = 8,
     counters: dict[str, int] | None = None,
+    fidelity: str | None = None,
 ) -> Any:
-    """Return a value-free shape with explicit, counted budget truncation markers."""
+    """Return a shape with explicit, counted budget truncation markers.
+
+    The same budget traversal runs at every fidelity level; what differs is whether
+    leaf primitives keep their values:
+
+    * ``shape``  -- primitives collapse to their type name (``"str"``, ``"int"`` ...).
+    * ``values`` -- primitives keep their value, but any value under a credential-ish
+      key (cookie, token, authorization, secret, session ...) is replaced with
+      ``<redacted>`` and its subtree is pruned, and free-standing bearer/``key=value``
+      secrets inside string leaves are scrubbed. This is the default.
+    * ``raw``    -- primitives keep their value verbatim, no redaction.
+
+    ``fidelity`` defaults to the process-wide ``capture_fidelity()`` and is resolved
+    once per call (not per node), so callers that need a fixed level -- the legacy
+    capture sanitizer forcing ``shape`` -- pass it explicitly.
+    """
+    level = fidelity or capture_fidelity()
+    retain = level in (CAPTURE_VALUES, CAPTURE_RAW)
+    redacting = level == CAPTURE_VALUES
     counts = counters if counters is not None else {}
     nodes = 0
 
@@ -310,16 +397,20 @@ def structural_shape(
             detail["omitted"] = max(omitted, 0)
         return {"$astrolabe_truncated": detail}
 
-    def visit(item: Any, depth: int) -> Any:
+    def visit(item: Any, depth: int, key: str | None = None) -> Any:
         nonlocal nodes
         nodes += 1
         if nodes > max_nodes:
             return truncated("node_budget")
         if depth > max_depth:
             return truncated("depth_budget")
+        if redacting and key and _SENSITIVE_KEY.search(key):
+            # Prune the whole subtree under a credential-ish key: never enumerate a
+            # cookie jar or token object, even its structure.
+            return REDACTED
         if isinstance(item, Mapping):
             keys = list(item)
-            shaped = {str(key): visit(item[key], depth + 1) for key in keys[:max_keys]}
+            shaped = {str(k): visit(item[k], depth + 1, str(k)) for k in keys[:max_keys]}
             if len(keys) > max_keys:
                 shaped["$astrolabe_truncated"] = {
                     "reason": "key_budget",
@@ -333,7 +424,7 @@ def structural_shape(
             samples = []
             signatures: set[str] = set()
             for member in item:
-                candidate = visit(member, depth + 1)
+                candidate = visit(member, depth + 1, key)
                 signature = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
                 if signature in signatures:
                     continue
@@ -347,7 +438,14 @@ def structural_shape(
                     break
             return samples
         if item is None:
-            return "null"
+            return None if retain else "null"
+        if retain:
+            # Scrub bearer tokens and inline `secret=...` assignments that sit inside
+            # free-text string leaves (an error message, a redirect URL). A value under
+            # a credential-ish key was already pruned above.
+            if redacting and isinstance(item, str):
+                return redact(item)
+            return item
         return type(item).__name__
 
     return visit(value, 0)
@@ -383,8 +481,13 @@ def request_metadata(
     shape_counters: dict[str, int] | None = None,
     shape_limits: dict[str, int] | None = None,
     decoded_payload: DecodedPayload | None = None,
+    fidelity: str | None = None,
 ) -> dict[str, Any]:
-    """Return bounded structural request metadata without retaining values.
+    """Return bounded structural request metadata.
+
+    At the default ``values`` fidelity the structural shape keeps primitive values
+    with credentials masked; ``fidelity="shape"`` forces the value-free boundary (the
+    legacy capture sanitizer relies on this). See ``structural_shape``.
 
     `decoded_payload` is what a caller that already ran `decode_payload` on these same
     bytes hands back, so a body is inflated once per request instead of once here and
@@ -438,11 +541,9 @@ def request_metadata(
         elif "application/x-www-form-urlencoded" in media_type:
             parsed = {key: value for key, value in up.parse_qsl(decoded.decode("utf-8", "replace"))}
     if parsed is not None:
-        result["request_shape"] = structural_shape(
-            parsed,
-            counters=shape_counters,
-            **(shape_limits or {}),
-        )
+        shape_kwargs: dict[str, Any] = {"counters": shape_counters, "fidelity": fidelity}
+        shape_kwargs.update(shape_limits or {})
+        result["request_shape"] = structural_shape(parsed, **shape_kwargs)
         if isinstance(parsed, dict):
             result["request_fields"] = sorted(str(k) for k in parsed)[:100]
         elif isinstance(parsed, list):

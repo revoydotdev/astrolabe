@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shlex
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -96,13 +97,43 @@ def _nonnegative_int(value: str, label: str, *, maximum: int) -> int:
     return parsed
 
 
+CREDENTIAL_POINTER = "credential.json"
+
+
+def write_credential_pointer(chart_dir: Path, cookies_file: Path) -> None:
+    """Record which private cookie file mapped this Chart. Path only, never values."""
+    target = Path(chart_dir) / CREDENTIAL_POINTER
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"cookies_file": str(Path(cookies_file).resolve())}, handle)
+
+
+def chart_cookies(toolpack_path: Path) -> Path | None:
+    """The cookie file a Chart was mapped with, when it is still a private regular file.
+
+    Lets one sextant host run many Charts, each under its own session, without a
+    global ASTROLABE_COOKIES. Anything unexpected yields None: the Chart then runs
+    anonymously rather than with a credential the pointer cannot vouch for.
+    """
+    pointer = Path(toolpack_path).parent / CREDENTIAL_POINTER
+    try:
+        raw = json.loads(pointer.read_text(encoding="utf-8"))
+        candidate = Path(raw["cookies_file"])
+        info = candidate.lstat()
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not candidate.is_absolute() or not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+        return None
+    return candidate
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     toolpack_path: Path
     auth_path: Path | None = None
     cookies_path: Path | None = None
     allow_mutations: bool = False
-    allow_anonymous: bool = False
+    allow_anonymous: bool = True
     allow_insecure_endpoint: bool = False
     max_concurrency: int = 4
     timeout_seconds: float = 30.0
@@ -168,9 +199,12 @@ class Settings:
             toolpack_path=Path(toolpack),
             graph_path=Path(value) if (value := os.environ.get("ASTROLABE_GRAPH")) else None,
             auth_path=auth_path,
-            cookies_path=Path(value) if (value := os.environ.get("ASTROLABE_COOKIES")) else None,
+            cookies_path=(
+                Path(value)
+                if (value := os.environ.get("ASTROLABE_COOKIES"))
+                else (None if auth_path else chart_cookies(Path(toolpack)))
+            ),
             allow_mutations=os.environ.get("ASTROLABE_ALLOW_MUTATIONS") == "1",
-            allow_anonymous=os.environ.get("ASTROLABE_ALLOW_ANONYMOUS") == "1",
             allow_insecure_endpoint=os.environ.get("ASTROLABE_ALLOW_INSECURE_ENDPOINT") == "1",
             max_concurrency=_positive_int(
                 os.environ.get("ASTROLABE_MAX_CONCURRENCY", "4"),

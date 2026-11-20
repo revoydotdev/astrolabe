@@ -13,12 +13,18 @@ from astrolabe.operation import (
     verification_allowed,
 )
 from astrolabe.security import (
+    CAPTURE_RAW,
+    CAPTURE_SHAPE,
+    CAPTURE_VALUES,
     REDACTED,
+    capture_fidelity,
     host_matches,
     is_first_party,
     normalize_host,
     redact,
     request_metadata,
+    retain_raw,
+    retain_values,
     safe_text,
     safe_url,
     structural_shape,
@@ -111,7 +117,9 @@ def test_validate_and_sanitize_url() -> None:
 
 def test_request_metadata_is_structural_and_optionally_keyed() -> None:
     body = json.dumps({"token": "CANARY", "variables": {"ids": [123]}})
-    metadata = request_metadata(body, "application/json; charset=utf-8", fingerprint_key=b"k")
+    metadata = request_metadata(
+        body, "application/json; charset=utf-8", fingerprint_key=b"k", fidelity=CAPTURE_SHAPE
+    )
     assert metadata["request_bytes"] == len(body.encode())
     assert metadata["request_media_type"] == "application/json"
     assert metadata["request_fields"] == ["token", "variables"]
@@ -140,6 +148,7 @@ def test_request_metadata_handles_gzip_and_multipart_without_values() -> None:
         compressed,
         "application/json",
         content_encoding="gzip",
+        fidelity=CAPTURE_SHAPE,
     )
     assert gzip_meta["request_shape"] == {"field": "str"}
     assert gzip_meta["request_content_encoding"] == "gzip"
@@ -149,7 +158,9 @@ def test_request_metadata_handles_gzip_and_multipart_without_values() -> None:
         b'--boundary\r\nContent-Disposition: form-data; name="upload"; filename="secret.txt"\r\n'
         b"Content-Type: text/plain\r\n\r\nCANARY\r\n--boundary--\r\n"
     )
-    multipart_meta = request_metadata(multipart, "multipart/form-data; boundary=boundary")
+    multipart_meta = request_metadata(
+        multipart, "multipart/form-data; boundary=boundary", fidelity=CAPTURE_SHAPE
+    )
     assert multipart_meta["request_shape"] == {"upload": "str"}
     assert "CANARY" not in json.dumps(multipart_meta)
 
@@ -200,7 +211,11 @@ def test_a_gzipped_request_body_is_inflated_exactly_once(monkeypatch) -> None:
     calls.clear()
     decoded = payloads.decode_payload(body, media_type="application/json", content_encoding="gzip")
     shared = request_metadata(
-        body, "application/json", content_encoding="gzip", decoded_payload=decoded
+        body,
+        "application/json",
+        content_encoding="gzip",
+        decoded_payload=decoded,
+        fidelity=CAPTURE_SHAPE,
     )
     assert calls == ["payloads.decode_payload"], f"inflated more than once: {calls}"
     assert shared["request_packaging"] == ["gzip", "json"]
@@ -209,7 +224,10 @@ def test_a_gzipped_request_body_is_inflated_exactly_once(monkeypatch) -> None:
 
     # A caller that decoded nothing is unchanged, and produces identical metadata.
     calls.clear()
-    assert request_metadata(body, "application/json", content_encoding="gzip") == shared
+    assert (
+        request_metadata(body, "application/json", content_encoding="gzip", fidelity=CAPTURE_SHAPE)
+        == shared
+    )
     assert calls == ["security.decode_payload"]
 
 
@@ -220,7 +238,11 @@ def test_a_multi_coded_content_encoding_still_counts_against_the_body_budget() -
     counters: dict[str, int] = {}
     body = gzip.compress(json.dumps({"field": "x"}).encode())
     metadata = request_metadata(
-        body, "application/json", content_encoding="gzip, identity", shape_counters=counters
+        body,
+        "application/json",
+        content_encoding="gzip, identity",
+        shape_counters=counters,
+        fidelity=CAPTURE_SHAPE,
     )
     assert metadata["request_truncated"] == {"reason": "body_byte_budget"}
     assert metadata["request_shape"] == {"field": "str"}
@@ -319,3 +341,77 @@ def test_active_verification_policy_refuses_unknown_batches_and_needs_two_mutati
         )[0]
         is False
     )
+
+
+# --- capture fidelity (replaces the binary developer-mode firewall) ----------
+
+
+@pytest.fixture
+def _clean_fidelity_env(monkeypatch):
+    monkeypatch.delenv("ASTROLABE_CAPTURE_FIDELITY", raising=False)
+    monkeypatch.delenv("ASTROLABE_DEVELOPER_MODE", raising=False)
+    return monkeypatch
+
+
+def test_default_fidelity_is_shape(_clean_fidelity_env) -> None:
+    # The value-free boundary is the library default; only the agent-facing `map`
+    # entrypoint opts into `values` (see mapping_mcp._capture_env).
+    assert capture_fidelity() == CAPTURE_SHAPE
+    assert retain_values() is False
+    assert retain_raw() is False
+
+
+def test_developer_mode_env_still_selects_raw(_clean_fidelity_env) -> None:
+    _clean_fidelity_env.setenv("ASTROLABE_DEVELOPER_MODE", "1")
+    assert capture_fidelity() == CAPTURE_RAW
+    assert retain_raw() is True
+
+
+def test_explicit_fidelity_overrides_legacy_flag(_clean_fidelity_env) -> None:
+    _clean_fidelity_env.setenv("ASTROLABE_DEVELOPER_MODE", "1")
+    _clean_fidelity_env.setenv("ASTROLABE_CAPTURE_FIDELITY", "shape")
+    assert capture_fidelity() == CAPTURE_SHAPE
+    assert retain_values() is False
+
+
+def test_unknown_fidelity_is_an_error_not_a_silent_fallback(_clean_fidelity_env) -> None:
+    _clean_fidelity_env.setenv("ASTROLABE_CAPTURE_FIDELITY", "loud")
+    with pytest.raises(ValueError):
+        capture_fidelity()
+
+
+def test_values_fidelity_keeps_data_but_masks_credentials() -> None:
+    payload = {
+        "data": {"user": {"id": 42, "name": "Ada", "friend_count": 128}},
+        "access_token": "SECRETTOKEN",
+        "session": {"xs": "SECRETTOKEN"},
+        "note": "Authorization: Bearer SECRETTOKEN here",
+    }
+    shaped = structural_shape(payload, fidelity=CAPTURE_VALUES)
+    # Real, non-sensitive data survives so an agent can read what it mapped.
+    assert shaped["data"]["user"]["id"] == 42
+    assert shaped["data"]["user"]["name"] == "Ada"
+    assert shaped["data"]["user"]["friend_count"] == 128
+    # Credential-ish keys are pruned to a marker, subtree and all.
+    assert shaped["access_token"] == REDACTED
+    assert shaped["session"] == REDACTED
+    # Inline bearer secrets inside free-text leaves are scrubbed.
+    assert "SECRETTOKEN" not in json.dumps(shaped)
+
+
+def test_shape_fidelity_collapses_every_value_to_a_type_name() -> None:
+    shaped = structural_shape({"id": 42, "name": "Ada"}, fidelity=CAPTURE_SHAPE)
+    assert shaped == {"id": "int", "name": "str"}
+
+
+def test_raw_fidelity_keeps_credentials_verbatim() -> None:
+    shaped = structural_shape({"access_token": "SECRETTOKEN"}, fidelity=CAPTURE_RAW)
+    assert shaped["access_token"] == "SECRETTOKEN"
+
+
+def test_request_metadata_default_values_retains_data_masks_token() -> None:
+    body = json.dumps({"token": "CANARY", "variables": {"ids": [123]}})
+    metadata = request_metadata(body, "application/json", fidelity=CAPTURE_VALUES)
+    assert metadata["request_shape"]["token"] == REDACTED
+    assert metadata["request_shape"]["variables"]["ids"] == [123]
+    assert "CANARY" not in json.dumps(metadata)

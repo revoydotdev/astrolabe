@@ -1,5 +1,5 @@
 {
-  "endpoints_json": "{\n  \"auth_headers\": {\n    \"authorization\": \"bearer\"\n  },\n  \"base_domain\": \"shop.example.test\",\n  \"client_credentials\": [],\n  \"declared_operations\": [],\n  \"graphql_endpoints\": [\n    \"/graphql\"\n  ],\n  \"graphql_operations\": {\n    \"AddToCart\": {\n      \"calls\": 1,\n      \"directives\": [],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {\n          \"cartId\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"cartId\"\n        ],\n        \"type\": \"object\"\n      },\n      \"input_shape\": {\n        \"cartId\": \"str\"\n      },\n      \"operation\": \"AddToCart\",\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": null,\n      \"protocol\": \"graphql-http\",\n      \"query\": \"mutation AddToCart($cartId: ID!) { addToCart(cartId: $cartId) { ok } }\",\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"returns\": [\n        \"addToCart\"\n      ],\n      \"root_fields\": [\n        \"addToCart\"\n      ],\n      \"semantic_kind\": \"mutation\",\n      \"type\": \"mutation\",\n      \"variables\": [\n        \"cartId\"\n      ]\n    },\n    \"ProductQuery\": {\n      \"calls\": 2,\n      \"directives\": [\n        \"@auth\",\n        \"@cached\"\n      ],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\"\n          },\n          \"includeVendor\": {\n            \"type\": [\n              \"boolean\",\n              \"null\"\n            ]\n          },\n          \"vendor\": {\n            \"properties\": {\n              \"id\": {\n                \"type\": \"string\"\n              },\n              \"name\": {\n                \"type\": \"string\"\n              }\n            },\n            \"type\": \"object\"\n          }\n        },\n        \"required\": [\n          \"id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"input_shape\": {\n        \"id\": \"str\",\n        \"includeVendor\": \"bool\",\n        \"vendor\": {\n          \"id\": \"str\",\n          \"name\": \"str\"\n        }\n      },\n      \"operation\": \"ProductQuery\",\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": null,\n      \"protocol\": \"graphql-http\",\n      \"query\": \"query ProductQuery($id: ID!, $includeVendor: Boolean) { product(id: $id) { id name } }\",\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"returns\": [\n        \"product\"\n      ],\n      \"root_fields\": [\n        \"product\"\n      ],\n      \"semantic_kind\": \"query\",\n      \"type\": \"query\",\n      \"variables\": [\n        \"id\",\n        \"includeVendor\"\n      ]\n    },\n    \"persisted:9f8e7d6c5b4a\": {\n      \"calls\": 1,\n      \"directives\": [],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"input_shape\": null,\n      \"operation\": null,\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": \"9f8e7d6c5b4a39281706f5e4d3c2b1a0\",\n      \"protocol\": \"graphql-aq\",\n      \"query\": null,\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"returns\": [\n        \"viewer\"\n      ],\n      \"root_fields\": [\n        \"viewer\"\n      ],\n      \"semantic_kind\": \"query\",\n      \"type\": \"query\",\n      \"variables\": []\n    }\n  },\n  \"introspection\": {\n    \"enabled\": false\n  },\n  \"misc_operations\": {\n    \"service-worker:https://shop.example.test/sw.js\": {\n      \"calls\": 1,\n      \"disabled_reason\": \"inventory-only browser worker channel\",\n      \"executable\": false,\n      \"id\": \"service-worker:https://shop.example.test/sw.js\",\n      \"method\": \"REGISTER\",\n      \"protocol\": \"service-worker\",\n      \"url\": \"https://shop.example.test/sw.js\"\n    }\n  },\n  \"rest_endpoints\": [\n    {\n      \"auth_headers\": [\n        \"accept\",\n        \"authorization\"\n      ],\n      \"calls\": 25,\n      \"method\": \"GET\",\n      \"path\": \"/api/products/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/invoice/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 4,\n      \"method\": \"GET\",\n      \"path\": \"/api/widgets/{uuid}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 4,\n      \"method\": \"GET\",\n      \"path\": \"/api/blobs/{hash}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        404\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 2,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/getVersion\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 2,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/search\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/getCaseDetails\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/listAll\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/createThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/dropThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/findThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/reindex\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 9,\n      \"method\": \"GET\",\n      \"path\": \"/api/cart\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 3,\n      \"method\": \"GET\",\n      \"path\": \"/api/checkout\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 3,\n      \"method\": \"GET\",\n      \"path\": \"/api/orders\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 6,\n      \"method\": \"GET\",\n      \"path\": \"/api/v1/catalog\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 6,\n      \"method\": \"GET\",\n      \"path\": \"/api/v2/catalog\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/invoice\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 10,\n      \"method\": \"GET\",\n      \"path\": \"/api/team/{id}/profile\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/legacy/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/session/~{uid}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/team\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 10,\n      \"method\": \"GET\",\n      \"path\": \"/api/team/{id}/members\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    }\n  ],\n  \"websocket_operations\": {\n    \"wss://shop.example.test/live::received::priceUpdate\": {\n      \"calls\": 7,\n      \"direction\": \"received\",\n      \"engineio\": null,\n      \"event\": \"priceUpdate\",\n      \"input_schema\": {\n        \"items\": {\n          \"properties\": {\n            \"price\": {\n              \"type\": \"number\"\n            },\n            \"symbol\": {\n              \"type\": \"string\"\n            }\n          },\n          \"type\": \"object\"\n        },\n        \"type\": \"array\"\n      },\n      \"namespace\": \"/prices\",\n      \"url\": \"wss://shop.example.test/live\"\n    },\n    \"wss://shop.example.test/live::sent::subscribe\": {\n      \"calls\": 3,\n      \"direction\": \"sent\",\n      \"engineio\": null,\n      \"event\": \"subscribe\",\n      \"input_schema\": {\n        \"items\": {\n          \"properties\": {\n            \"channel\": {\n              \"type\": \"string\"\n            }\n          },\n          \"type\": \"object\"\n        },\n        \"type\": \"array\"\n      },\n      \"namespace\": null,\n      \"url\": \"wss://shop.example.test/live\"\n    }\n  },\n  \"websockets\": {\n    \"wss://shop.example.test/live\": {\n      \"engineio\": null,\n      \"events_received\": {\n        \"priceUpdate\": {\n          \"arg_shape\": [\n            {\n              \"price\": \"float\",\n              \"symbol\": \"str\"\n            }\n          ],\n          \"count\": 7,\n          \"ns\": \"/prices\"\n        }\n      },\n      \"events_sent\": {\n        \"subscribe\": {\n          \"arg_shape\": [\n            {\n              \"channel\": \"str\"\n            }\n          ],\n          \"count\": 3,\n          \"ns\": null\n        }\n      }\n    }\n  }\n}\n",
+  "endpoints_json": "{\n  \"auth_headers\": {\n    \"authorization\": \"bearer\"\n  },\n  \"base_domain\": \"shop.example.test\",\n  \"client_credentials\": [],\n  \"declared_operations\": [],\n  \"graphql_endpoints\": [\n    \"/graphql\"\n  ],\n  \"graphql_operations\": {\n    \"AddToCart\": {\n      \"calls\": 1,\n      \"directives\": [],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {\n          \"cartId\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"cartId\"\n        ],\n        \"type\": \"object\"\n      },\n      \"input_shape\": {\n        \"cartId\": \"str\"\n      },\n      \"operation\": \"AddToCart\",\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": null,\n      \"protocol\": \"graphql-http\",\n      \"query\": \"mutation AddToCart($cartId: ID!) { addToCart(cartId: $cartId) { ok } }\",\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"response_shape\": {\n        \"data\": {\n          \"addToCart\": {\n            \"line\": {\n              \"qty\": \"int\"\n            },\n            \"ok\": \"bool\"\n          }\n        }\n      },\n      \"returns\": [\n        \"addToCart\"\n      ],\n      \"root_fields\": [\n        \"addToCart\"\n      ],\n      \"semantic_kind\": \"mutation\",\n      \"type\": \"mutation\",\n      \"variables\": [\n        \"cartId\"\n      ]\n    },\n    \"ProductQuery\": {\n      \"calls\": 2,\n      \"directives\": [\n        \"@auth\",\n        \"@cached\"\n      ],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\"\n          },\n          \"includeVendor\": {\n            \"type\": [\n              \"boolean\",\n              \"null\"\n            ]\n          },\n          \"vendor\": {\n            \"properties\": {\n              \"id\": {\n                \"type\": \"string\"\n              },\n              \"name\": {\n                \"type\": \"string\"\n              }\n            },\n            \"type\": \"object\"\n          }\n        },\n        \"required\": [\n          \"id\"\n        ],\n        \"type\": \"object\"\n      },\n      \"input_shape\": {\n        \"id\": \"str\",\n        \"includeVendor\": \"bool\",\n        \"vendor\": {\n          \"id\": \"str\",\n          \"name\": \"str\"\n        }\n      },\n      \"operation\": \"ProductQuery\",\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": null,\n      \"protocol\": \"graphql-http\",\n      \"query\": \"query ProductQuery($id: ID!, $includeVendor: Boolean) { product(id: $id) { id name } }\",\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"response_shape\": {\n        \"data\": {\n          \"product\": {\n            \"id\": \"str\",\n            \"name\": \"str\",\n            \"vendor\": {\n              \"id\": \"str\"\n            }\n          }\n        }\n      },\n      \"returns\": [\n        \"product\"\n      ],\n      \"root_fields\": [\n        \"product\"\n      ],\n      \"semantic_kind\": \"query\",\n      \"type\": \"query\",\n      \"variables\": [\n        \"id\",\n        \"includeVendor\"\n      ]\n    },\n    \"persisted:9f8e7d6c5b4a\": {\n      \"calls\": 1,\n      \"directives\": [],\n      \"http_method\": \"POST\",\n      \"input_schema\": {\n        \"properties\": {},\n        \"type\": \"object\"\n      },\n      \"input_shape\": null,\n      \"operation\": null,\n      \"parse_confidence\": \"legacy\",\n      \"persistedHash\": \"9f8e7d6c5b4a39281706f5e4d3c2b1a0\",\n      \"protocol\": \"graphql-aq\",\n      \"query\": null,\n      \"request_media_type\": null,\n      \"request_template\": {},\n      \"request_url\": \"https://shop.example.test/graphql\",\n      \"response_shape\": {\n        \"data\": {\n          \"viewer\": {\n            \"id\": \"str\"\n          }\n        }\n      },\n      \"returns\": [\n        \"viewer\"\n      ],\n      \"root_fields\": [\n        \"viewer\"\n      ],\n      \"semantic_kind\": \"query\",\n      \"type\": \"query\",\n      \"variables\": []\n    }\n  },\n  \"introspection\": {\n    \"enabled\": false\n  },\n  \"misc_operations\": {\n    \"service-worker:https://shop.example.test/sw.js\": {\n      \"calls\": 1,\n      \"disabled_reason\": \"inventory-only browser worker channel\",\n      \"executable\": false,\n      \"id\": \"service-worker:https://shop.example.test/sw.js\",\n      \"method\": \"REGISTER\",\n      \"protocol\": \"service-worker\",\n      \"url\": \"https://shop.example.test/sw.js\"\n    }\n  },\n  \"rest_endpoints\": [\n    {\n      \"auth_headers\": [\n        \"accept\",\n        \"authorization\"\n      ],\n      \"calls\": 25,\n      \"method\": \"GET\",\n      \"path\": \"/api/products/{id}\",\n      \"request_url\": \"https://shop.example.test/api/products/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/invoice/{id}\",\n      \"request_url\": \"https://shop.example.test/api/invoice/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 4,\n      \"method\": \"GET\",\n      \"path\": \"/api/widgets/{uuid}\",\n      \"request_url\": \"https://shop.example.test/api/widgets/{uuid}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 4,\n      \"method\": \"GET\",\n      \"path\": \"/api/blobs/{hash}\",\n      \"request_url\": \"https://shop.example.test/api/blobs/{hash}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        404\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 2,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/getVersion\",\n      \"request_url\": \"https://shop.example.test/api/public/getVersion\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 2,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/search\",\n      \"request_url\": \"https://shop.example.test/api/public/search\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/public/getCaseDetails\",\n      \"request_url\": \"https://shop.example.test/api/public/getCaseDetails\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/listAll\",\n      \"request_url\": \"https://shop.example.test/api/public/listAll\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/createThing\",\n      \"request_url\": \"https://shop.example.test/api/public/createThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/dropThing\",\n      \"request_url\": \"https://shop.example.test/api/public/dropThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/findThing\",\n      \"request_url\": \"https://shop.example.test/api/public/findThing\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"POST\",\n      \"path\": \"/api/public/reindex\",\n      \"request_url\": \"https://shop.example.test/api/public/reindex\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 9,\n      \"method\": \"GET\",\n      \"path\": \"/api/cart\",\n      \"request_url\": \"https://shop.example.test/api/cart\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 3,\n      \"method\": \"GET\",\n      \"path\": \"/api/checkout\",\n      \"request_url\": \"https://shop.example.test/api/checkout\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 3,\n      \"method\": \"GET\",\n      \"path\": \"/api/orders\",\n      \"request_url\": \"https://shop.example.test/api/orders\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 6,\n      \"method\": \"GET\",\n      \"path\": \"/api/v1/catalog\",\n      \"request_url\": \"https://shop.example.test/api/v1/catalog\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 6,\n      \"method\": \"GET\",\n      \"path\": \"/api/v2/catalog\",\n      \"request_url\": \"https://shop.example.test/api/v2/catalog\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/invoice\",\n      \"request_url\": \"https://shop.example.test/api/invoice\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 10,\n      \"method\": \"GET\",\n      \"path\": \"/api/team/{id}/profile\",\n      \"request_url\": \"https://shop.example.test/api/team/{id}/profile\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/legacy/{id}\",\n      \"request_url\": \"https://shop.example.test/api/legacy/{id}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 1,\n      \"method\": \"GET\",\n      \"path\": \"/api/session/~{uid}\",\n      \"request_url\": \"https://shop.example.test/api/session/~{uid}\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 5,\n      \"method\": \"GET\",\n      \"path\": \"/api/team\",\n      \"request_url\": \"https://shop.example.test/api/team\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    },\n    {\n      \"auth_headers\": [],\n      \"calls\": 10,\n      \"method\": \"GET\",\n      \"path\": \"/api/team/{id}/members\",\n      \"request_url\": \"https://shop.example.test/api/team/{id}/members\",\n      \"response_kinds\": [\n        \"json-api\"\n      ],\n      \"response_media_types\": [\n        \"application/json\"\n      ],\n      \"status\": [\n        200\n      ]\n    }\n  ],\n  \"websocket_operations\": {\n    \"wss://shop.example.test/live::received::priceUpdate\": {\n      \"calls\": 7,\n      \"direction\": \"received\",\n      \"engineio\": null,\n      \"event\": \"priceUpdate\",\n      \"input_schema\": {\n        \"items\": {\n          \"properties\": {\n            \"price\": {\n              \"type\": \"number\"\n            },\n            \"symbol\": {\n              \"type\": \"string\"\n            }\n          },\n          \"type\": \"object\"\n        },\n        \"type\": \"array\"\n      },\n      \"namespace\": \"/prices\",\n      \"url\": \"wss://shop.example.test/live\"\n    },\n    \"wss://shop.example.test/live::sent::subscribe\": {\n      \"calls\": 3,\n      \"direction\": \"sent\",\n      \"engineio\": null,\n      \"event\": \"subscribe\",\n      \"input_schema\": {\n        \"items\": {\n          \"properties\": {\n            \"channel\": {\n              \"type\": \"string\"\n            }\n          },\n          \"type\": \"object\"\n        },\n        \"type\": \"array\"\n      },\n      \"namespace\": null,\n      \"url\": \"wss://shop.example.test/live\"\n    }\n  },\n  \"websockets\": {\n    \"wss://shop.example.test/live\": {\n      \"engineio\": null,\n      \"events_received\": {\n        \"priceUpdate\": {\n          \"arg_shape\": [\n            {\n              \"price\": \"float\",\n              \"symbol\": \"str\"\n            }\n          ],\n          \"count\": 7,\n          \"ns\": \"/prices\"\n        }\n      },\n      \"events_sent\": {\n        \"subscribe\": {\n          \"arg_shape\": [\n            {\n              \"channel\": \"str\"\n            }\n          ],\n          \"count\": 3,\n          \"ns\": null\n        }\n      }\n    }\n  }\n}\n",
   "graphql_operations": [
     "AddToCart",
     "ProductQuery",
@@ -221,9 +221,17 @@
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -300,14 +308,22 @@
           "type": "object"
         },
         "path": "/api/products/{id}",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -342,14 +358,22 @@
           "type": "object"
         },
         "path": "/api/invoice/{id}",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "uuid": {
+              "description": "path parameter {uuid}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "uuid"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -384,14 +408,22 @@
           "type": "object"
         },
         "path": "/api/widgets/{uuid}",
-        "reason": "unsatisfiable_required_input: uuid",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "hash": {
+              "description": "path parameter {hash}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hash"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -426,7 +458,7 @@
           "type": "object"
         },
         "path": "/api/blobs/{hash}",
-        "reason": "unsatisfiable_required_input: hash",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
@@ -1299,9 +1331,17 @@
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1336,14 +1376,22 @@
           "type": "object"
         },
         "path": "/api/team/{id}/profile",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1386,14 +1434,22 @@
           "type": "object"
         },
         "path": "/api/legacy/{id}",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "uid": {
+              "description": "path parameter {uid}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "uid"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1436,7 +1492,7 @@
           "type": "object"
         },
         "path": "/api/session/~{uid}",
-        "reason": "unsatisfiable_required_input: uid",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
@@ -1501,9 +1557,17 @@
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1538,7 +1602,7 @@
           "type": "object"
         },
         "path": "/api/team/{id}/members",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       }
@@ -1758,9 +1822,17 @@
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1837,14 +1909,22 @@
           "type": "object"
         },
         "path": "/api/products/{id}",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1879,14 +1959,22 @@
           "type": "object"
         },
         "path": "/api/invoice/{id}",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "uuid": {
+              "description": "path parameter {uuid}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "uuid"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1921,14 +2009,22 @@
           "type": "object"
         },
         "path": "/api/widgets/{uuid}",
-        "reason": "unsatisfiable_required_input: uuid",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "hash": {
+              "description": "path parameter {hash}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hash"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -1963,7 +2059,7 @@
           "type": "object"
         },
         "path": "/api/blobs/{hash}",
-        "reason": "unsatisfiable_required_input: hash",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
@@ -2836,9 +2932,17 @@
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -2873,14 +2977,22 @@
           "type": "object"
         },
         "path": "/api/team/{id}/profile",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -2923,14 +3035,22 @@
           "type": "object"
         },
         "path": "/api/legacy/{id}",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "uid": {
+              "description": "path parameter {uid}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "uid"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -2973,7 +3093,7 @@
           "type": "object"
         },
         "path": "/api/session/~{uid}",
-        "reason": "unsatisfiable_required_input: uid",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       },
@@ -3038,9 +3158,17 @@
         "type": "query"
       },
       {
-        "exposed": false,
+        "exposed": true,
         "input_schema": {
-          "properties": {},
+          "properties": {
+            "id": {
+              "description": "path parameter {id}",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
           "type": "object"
         },
         "method": "GET",
@@ -3075,7 +3203,7 @@
           "type": "object"
         },
         "path": "/api/team/{id}/members",
-        "reason": "unsatisfiable_required_input: id",
+        "reason": null,
         "transport": "rest",
         "type": "query"
       }

@@ -174,6 +174,9 @@ def build_from_capture(capture_dir):
             "transport": "graphql",
             "input_schema": input_schema,
             "return_schema": return_schema,
+            # body values retained at `values`/`raw` fidelity (credentials masked at
+            # `values`); collapsed to type names at `shape`
+            "response_shape": meta.get("response_shape") or meta.get("resp_shape"),
             "proof": {
                 "observed": {
                     "ok": observed,

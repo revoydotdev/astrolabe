@@ -37,7 +37,8 @@ from . import contract_store
 from . import profile as prof
 from . import browser as br
 from .artifact import atomic_write_json
-from .security import egress_policy, normalize_host, safe_text, validate_url
+from .security import egress_policy, normalize_host, retain_raw, safe_text, validate_url
+from .capture import normalize_cookies
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _CLEANUP_STACK: list[list[Callable[[], Any]]] = []
@@ -407,12 +408,15 @@ def put(hp, src, dst):
     )
 
 
-def get(hp, src, dst):
-    """Pull a required artifact back, failing closed if it is unavailable."""
+def get(hp, src, dst, required=True):
+    """Pull an artifact back. Fails closed by default; pass required=False
+    to skip silently when the source is missing (best-effort pull)."""
     if hp.local:
         s = os.path.expanduser(src)
         if not os.path.isfile(s):
-            raise FileNotFoundError(f"required remote artifact does not exist locally: {s}")
+            if required:
+                raise FileNotFoundError(f"required remote artifact does not exist locally: {s}")
+            return None
         return _require_success(run(["cp", s, dst]), f"copy artifact {src}")
     safe_src = _validate_remote_path(src)
     return _require_success(
@@ -830,7 +834,7 @@ def cmd_map(a):
             cks = export_cookies(a.browser, dom, a.profile)
             print(f"[cookies] {len(cks)} domain-scoped cookies from {a.browser}")
         else:
-            cks = browser_cookies(json.load(open(os.path.expanduser(a.cookies_file))))
+            cks = browser_cookies(normalize_cookies(json.load(open(os.path.expanduser(a.cookies_file)))))
             print(f"[cookies] {len(cks)} cookies from file")
         atomic_write_json(cookies_local, cks, mode=0o600)
 
@@ -911,13 +915,29 @@ def cmd_map(a):
     print(f"[capture] running on {hp.host} …")
     r = run_capture_argv(hp, cap, a.timeout, cwd=rdir)
     print(r.stdout[-2000:] if r.stdout else "")
-    _require_success(r, "capture")
 
-    # 4. pull PII-safe artifacts only. NOT cookies, NOT auth.headers.json, and NOT
-    #    capture.har — the full HAR holds response bodies (PII) + Bearer tokens in
-    #    request headers, so it stays on the host tmpfs and is processed there (step 6).
-    for f in ("capture.jsonl", "meta.json", "graphql-names.txt", "transfer-manifest.json"):
+    # 4. pull artifacts before the success check so a partial run still
+    #    preserves whatever the host managed to write.
+    safe_artifacts = ("capture.jsonl", "meta.json", "graphql-names.txt", "transfer-manifest.json")
+    sensitive_required = ("capture.har", "cookies.json")
+    sensitive_optional = ("auth.headers.json",)
+    if retain_raw():
+        print(
+            "\n!!! astrolabe capture fidelity = raw !!!\n"
+            f"    pulling sensitive artifacts: {', '.join(sensitive_required + sensitive_optional)}\n"
+            "    the chart dir is now a credential artifact.\n",
+            file=sys.stderr,
+        )
+        for f in sensitive_required:
+            get(hp, f"{rdir}/{f}", os.path.join(out, f))
+        for f in sensitive_optional:
+            got = get(hp, f"{rdir}/{f}", os.path.join(out, f), required=False)
+            if got is None:
+                print(f"[raw-mode] {f} not present on host — skipped (best-effort)", file=sys.stderr)
+    for f in safe_artifacts:
         get(hp, f"{rdir}/{f}", os.path.join(out, f))
+
+    _require_success(r, "capture")
 
     _verify_transfer_manifest(out, run_id)
 
@@ -929,7 +949,18 @@ def cmd_map(a):
     if meta.get("run_id") != run_id:
         raise PartialCaptureError("capture metadata run ID does not match the requested run")
     if meta.get("partial"):
-        raise PartialCaptureError("capture host marked the run partial")
+        # in developer mode, a partial capture is treated as a warning not a
+        # failure: the HAR arrived (otherwise the env-var-gated pull above
+        # would have raised), and the operator explicitly asked for body
+        # retention. Run analyze with whatever made it through.
+        if retain_raw() and os.path.isfile(os.path.join(out, "capture.har")):
+            print(
+                "[raw-mode] capture host marked run partial — proceeding with analyze "
+                "because capture.har landed and raw fidelity is on",
+                file=sys.stderr,
+            )
+        else:
+            raise PartialCaptureError("capture host marked the run partial")
     if normalize_host(str(meta.get("base_domain") or "")) != dom:
         raise PartialCaptureError("capture metadata target does not match the requested domain")
     intro = (meta.get("events", {}) or {}).get("introspection") or {}
@@ -1050,7 +1081,7 @@ def cmd_replay(a):
     _track_local_secret(cookies_local)
     atomic_write_json(
         cookies_local,
-        json.load(open(os.path.expanduser(a.cookies_file))),
+        normalize_cookies(json.load(open(os.path.expanduser(a.cookies_file)))),
         mode=0o600,
     )
 
@@ -1317,7 +1348,7 @@ def cmd_contract(a):
         else:
             atomic_write_json(
                 cookies_local,
-                json.load(open(os.path.expanduser(a.cookies_file))),
+                normalize_cookies(json.load(open(os.path.expanduser(a.cookies_file)))),
                 mode=0o600,
             )
         rdir = f"/dev/shm/astrolabe-contract-{_target_slug(dom)}-{_new_run_id()}"
@@ -1521,6 +1552,7 @@ def cmd_migrate_artifact(a):
     atomic_write_json(destination, migrated)
     print(f"[migrate-artifact] schema v{migrated['schema_version']} -> {destination}")
 
+
 def cmd_fetch(a):
     from .fetch import FetchExit
     from .fetch import run as run_fetch
@@ -1537,7 +1569,6 @@ def cmd_env(a):
         "warning": envfile.permissions_warning(path) if path else None,
         "values": envfile.redacted(values),
     }
-
 
 def build_parser():
     ap = argparse.ArgumentParser(

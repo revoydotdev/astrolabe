@@ -1,13 +1,13 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform != 'win32'",
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
-    "python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version < '3.14' and sys_platform == 'win32'",
     "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32')",
 ]
 
@@ -665,16 +665,16 @@ wheels = [
 
 [[package]]
 name = "cloakbrowser"
-version = "0.5.7"
+version = "0.5.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
     { name = "playwright" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/88/9f/fc4711a902af891e0a5cc83bbedfeac6d8bb3d6c4e6aea4c66633d117a53/cloakbrowser-0.5.7.tar.gz", hash = "sha256:644608c4f7985e70077e335cad94b6ec8ecaefa4e2674613c698165223cb5a23", size = 5696360, upload-time = "2026-08-11T02:18:31.735Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/ed/ca7144a592654e3252df77b99e7ab55fbe3b1501d03059fd904a3cd2c8c9/cloakbrowser-0.5.12.tar.gz", hash = "sha256:56dde14ae5900462759190fb307b4c15c670e7442a87bfa1246b06cd43ad6383", size = 5763164, upload-time = "2026-10-04T18:22:14.257Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/86/8fd3edd70a5e1ad147b982e5d033068ad19d9f1328050e5419c3de94c9e5/cloakbrowser-0.5.7-py3-none-any.whl", hash = "sha256:2a675d718323d7f1ce88be04a33c183d6cd56d5a67ea1212d01f118596146cd7", size = 125255, upload-time = "2026-08-11T02:18:29.997Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/5e/992f025861907a73d765a57dc0ea92303258aa788ebb30818d3c21ae7e02/cloakbrowser-0.5.12-py3-none-any.whl", hash = "sha256:4614baedcca123816b497df017755a176b8bffc7115f8fade164a774bdf29cbb", size = 137173, upload-time = "2026-10-04T18:22:12.48Z" },
 ]
 
 [package.optional-dependencies]

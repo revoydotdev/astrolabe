@@ -1284,7 +1284,101 @@ class Runtime:
             self._local.cookie_generation = cookie_generation
         return session
 
+    def _meta_form_fields(self, request_url: str, *, force: bool = False) -> dict[str, str]:
+        """Mint Meta's per-page form tokens from the cookie session itself.
+
+        A Meta doc-id POST is refused (HTML, HTTP 200) without ``fb_dtsg``/``lsd``/``av``.
+        Those are not secrets beyond the cookies that already authorize the session: the
+        logged-in HTML hands them to any client holding the cookies. Bootstrapping them
+        here means a cookie-mapped Chart runs with no operator-supplied auth file.
+        Cached for _META_TOKEN_TTL_SECONDS; ``force`` re-mints after a refusal.
+        """
+        return self._meta_bootstrap(request_url, force=force)[0]
+
+    def _client_headers(
+        self, tool: dict[str, Any], request_url: str, cookies: tuple[dict[str, Any], ...]
+    ) -> dict[str, str]:
+        """Rebuild the client headers a cookie-only capture recorded by name only.
+
+        Capture keeps header names, never values. The values a browser sends for the
+        anti-CSRF and app-id headers are derived from the cookies (``csrftoken``) or the
+        page the cookies already open, so a cookie-mapped Chart can replay them without
+        an operator-supplied auth file.
+        """
+        names = {str(name).lower() for name in tool.get("auth_headers") or []}
+        headers: dict[str, str] = {}
+        host = (urlparse(request_url).hostname or "").lower()
+        if "x-csrftoken" in names:
+            for cookie in cookies:
+                domain = str(cookie.get("domain") or "").lstrip(".").lower()
+                if cookie.get("name") == "csrftoken" and cookie.get("value") and (
+                    not domain or host == domain or host.endswith("." + domain)
+                ):
+                    headers["x-csrftoken"] = str(cookie["value"])
+                    break
+        if "x-requested-with" in names:
+            headers["x-requested-with"] = "XMLHttpRequest"
+        if names:
+            headers.update(self._meta_bootstrap(request_url)[1])
+        return headers
+
+    def _meta_bootstrap(
+        self, request_url: str, *, force: bool = False
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """One cached GET of the origin's page: (doc-id form fields, client headers)."""
+        parts = urlparse(request_url)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        with self._state_lock:
+            cache: dict[str, tuple[float, dict[str, str], dict[str, str]]] | None = getattr(
+                self, "_meta_tokens", None
+            )
+            if cache is None:
+                cache = {}
+                self._meta_tokens = cache
+            hit = cache.get(origin)
+            if hit and not force and time.monotonic() - hit[0] < _META_TOKEN_TTL_SECONDS:
+                return dict(hit[1]), dict(hit[2])
+        try:
+            response = self._session().get(f"{origin}/", timeout=self.settings.timeout_seconds)
+            text = response.text if response.status_code == 200 else ""
+        except Exception:  # noqa: BLE001 — bootstrap is best effort; the call reports the refusal
+            text = ""
+        fields: dict[str, str] = {}
+        if (dtsg := _META_DTSG.search(text)) is not None:
+            fields["fb_dtsg"] = dtsg.group(1)
+        if (lsd := _META_LSD.search(text)) is not None:
+            fields["lsd"] = lsd.group(1)
+        if (actor := _META_ACTOR.search(text)) is not None and actor.group(1) != "0":
+            fields["av"] = actor.group(1)
+        if "fb_dtsg" in fields:
+            fields.setdefault("__a", "1")
+            fields.setdefault("__comet_req", "7")
+        else:
+            fields = {}
+        headers: dict[str, str] = {}
+        if (app := _META_APP_ID.search(text)) is not None:
+            headers["x-ig-app-id"] = app.group(1)
+        with self._state_lock:
+            # Negative results are cached too, so a non-Meta origin costs one GET per TTL.
+            cache[origin] = (time.monotonic(), dict(fields), dict(headers))
+        return fields, headers
+
     async def execute(self, tool: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
+        result = await self._execute(tool, arguments)
+        if (
+            tool.get("protocol") == Protocol.GRAPHQL_META_DOC_ID.value
+            and isinstance(result, dict)
+            and result.get("error_code") == "UPSTREAM_NON_JSON"
+            and getattr(self, "_meta_tokens", None)
+            # Mutations are never auto-retried by policy.
+            and tool.get("type") != SemanticKind.MUTATION.value
+        ):
+            # Cached page tokens went stale; re-mint once and retry.
+            self._meta_force_refresh = True
+            result = await self._execute(tool, arguments)
+        return result
+
+    async def _execute(self, tool: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
         if tool["type"] == SemanticKind.UNKNOWN.value:
             return _failure("UNKNOWN_SEMANTIC_KIND", "operation is inventoried but not executable")
         if tool["type"] == "mutation" and not self.settings.allow_mutations:
@@ -1380,6 +1474,19 @@ class Runtime:
         headers = _safe_headers(auth)
         try:
             method, url, body, params = self._build_request(tool, arguments, headers)
+            if not auth and cookie_snapshot and tool.get("auth_headers"):
+                for key, value in (
+                    await asyncio.to_thread(self._client_headers, tool, url, cookie_snapshot)
+                ).items():
+                    headers.setdefault(key, value)
+            if (
+                tool.get("protocol") == Protocol.GRAPHQL_META_DOC_ID.value
+                and not auth_form_fields
+                and cookie_snapshot
+            ):
+                force = bool(getattr(self, "_meta_force_refresh", False))
+                self._meta_force_refresh = False
+                auth_form_fields = await asyncio.to_thread(self._meta_form_fields, url, force=force)
             if tool.get("protocol") == Protocol.GRAPHQL_META_DOC_ID.value and auth_form_fields:
                 if method != "POST" or not isinstance(body, dict):
                     raise ConfigurationError(
@@ -1879,7 +1986,13 @@ class Runtime:
                             "additionalProperties": True,
                         }
                 output_validation = validate_json_schema(result, selected_schema)
-                if not output_validation["valid"]:
+                drift = [
+                    error
+                    for error in output_validation["errors"]
+                    if not _null_only_observation(selected_schema, error, result)
+                ]
+                if not output_validation["valid"] and drift:
+                    output_validation = {**output_validation, "errors": drift}
                     failure = _failure(
                         "SCHEMA_DRIFT",
                         json.dumps(output_validation["errors"]),
@@ -1895,6 +2008,70 @@ class Runtime:
                 if attempt + 1 < attempts:
                     time.sleep(retry_delay(attempt, None))
         return _failure("UPSTREAM_UNAVAILABLE", last_error, retryable=True)
+
+
+def _walk(node: Any, segments: list[str]) -> tuple[bool, Any]:
+    for part in segments:
+        if isinstance(node, list):
+            try:
+                node = node[int(part)]
+            except (ValueError, IndexError):
+                return False, None
+        elif isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return False, None
+    return True, node
+
+
+def _null_only_observation(
+    schema: dict[str, Any], error: dict[str, Any], instance: Any = None
+) -> bool:
+    """A null on either side of a type error is nullability, not drift.
+
+    Shape inference from samples cannot see nullability: a field null in every observed
+    response is recorded as ``{"type": "null"}``, and one never observed null is recorded
+    without it. GraphQL fields are nullable by default, so a null value now, or a value
+    where only null was seen, must not fail the call. Any other type change still does.
+    """
+    if error.get("validator") == "required":
+        # Optionality is as invisible to sampling as nullability: a key present in every
+        # observed response may still be omitted. Below the response's own top-level
+        # fields an absent key is not drift; a missing top-level field (an error body in
+        # place of data) still is.
+        return len([p for p in str(error.get("path") or "").split("/") if p]) >= 2
+    if error.get("validator") != "type":
+        return False
+    found, value = _walk(instance, [p for p in str(error.get("path") or "").split("/") if p])
+    if found and value is None:
+        return True
+    ok, node_at = _walk(
+        schema, [p for p in str(error.get("schema_path") or "").split("/") if p][:-1]
+    )
+    # A sample of whole numbers cannot tell integer from number; a fraction later is
+    # the same field, not a new contract.
+    if (
+        ok
+        and isinstance(node_at, dict)
+        and node_at.get("type") == "integer"
+        and isinstance(value, float)
+    ):
+        return True
+    node: Any = schema
+    segments = [part for part in str(error.get("schema_path") or "").split("/") if part][:-1]
+    for part in segments:
+        if isinstance(node, list):
+            try:
+                node = node[int(part)]
+            except (ValueError, IndexError):
+                return False
+        elif isinstance(node, dict):
+            if part not in node:
+                return False
+            node = node[part]
+        else:
+            return False
+    return isinstance(node, dict) and node.get("type") in ("null", ["null"])
 
 
 def _mode_is_private(path: Path | None) -> bool | None:
@@ -2987,7 +3164,9 @@ def _collect_toolpack_paths() -> list[Path]:
     for token in multi:
         p = _expand_user_p(Path(token))
         if p.is_dir():
-            candidates = sorted(c for c in p.glob("*.json") if c.is_file() and _looks_like_a_pack(c))
+            candidates = sorted(
+                c for c in p.glob("*.json") if c.is_file() and _looks_like_a_pack(c)
+            )
             candidates += sorted(p.rglob("toolpack.json"))
         elif p.is_file():
             candidates = [p]
@@ -3084,6 +3263,33 @@ def _pack_contract(contracts: list[str]) -> str | None:
     )
 
 
+_REMOUNT_INTERVAL_SECONDS = 2.0
+
+
+_META_TOKEN_TTL_SECONDS = 1800.0
+_META_DTSG = re.compile(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"')
+_META_LSD = re.compile(r'"LSD",\[\],\{"token":"([^"]+)"')
+_META_ACTOR = re.compile(r'"actorID":"(\d+)"')
+_META_APP_ID = re.compile(r'"X-IG-App-ID":"(\d+)"')
+
+
+def _pack_fingerprint() -> tuple[tuple[str, int], ...]:
+    """Which packs exist and when each last changed, including its credential pointer."""
+    out = []
+    for path in _collect_toolpack_paths():
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        pointer = path.parent / "credential.json"
+        try:
+            mtime ^= pointer.stat().st_mtime_ns
+        except OSError:
+            pass
+        out.append((str(path), mtime))
+    return tuple(out)
+
+
 def _chart_server_for(toolpack_path: Path) -> FastMCP:
     """Build the per-Chart server for ``toolpack_path``, honoring every ``ASTROLABE_*`` knob.
 
@@ -3173,42 +3379,73 @@ def create_server(*, auth: AuthProvider | None = None) -> FastMCP:
             flush=True,
         )
 
-    packs: list[tuple[str, FastMCP, str]] = []
-    contracts: list[str] = []
-    skipped: list[dict[str, str]] = []
-    seen: dict[str, Path] = {}
-    for pack_path in _newest_first(_collect_toolpack_paths()):
-        try:
-            typed = _chart_server_for(pack_path)
-        except Exception as exc:  # noqa: BLE001 — operator-facing skip log
-            skipped.append({"pack_path": str(pack_path), "reason": f"construct: {exc}"})
-            continue
-        namespace = _sanitize_namespace(typed.name or "")
-        if not namespace:
-            skipped.append(
-                {"pack_path": str(pack_path), "reason": "construct: empty namespace after sanitize"}
-            )
-            continue
-        if namespace in seen:
-            skipped.append(
-                {
-                    "pack_path": str(pack_path),
-                    "reason": (
-                        f"collision: namespace {namespace!r} is served by newer pack "
-                        f"{seen[namespace]}"
-                    ),
-                }
-            )
-            continue
-        seen[namespace] = pack_path
-        packs.append((namespace, typed, str(pack_path)))
-        if typed.instructions:
-            contracts.append(typed.instructions)
-    # Resolution ran newest-first; report in path order so output is stable across restarts.
-    packs.sort(key=lambda pack: pack[2])
-    skipped.sort(key=lambda entry: entry["pack_path"])
+    def _mount() -> tuple[list[tuple[str, FastMCP, str]], list[str], list[dict[str, str]]]:
+        """Build every Chart under the configured roots, newest pack winning a namespace."""
+        packs: list[tuple[str, FastMCP, str]] = []
+        contracts: list[str] = []
+        skipped: list[dict[str, str]] = []
+        seen: dict[str, Path] = {}
+        for pack_path in _newest_first(_collect_toolpack_paths()):
+            try:
+                typed = _chart_server_for(pack_path)
+            except Exception as exc:  # noqa: BLE001 — operator-facing skip log
+                skipped.append({"pack_path": str(pack_path), "reason": f"construct: {exc}"})
+                continue
+            namespace = _sanitize_namespace(typed.name or "")
+            if not namespace:
+                skipped.append(
+                    {
+                        "pack_path": str(pack_path),
+                        "reason": "construct: empty namespace after sanitize",
+                    }
+                )
+                continue
+            if namespace in seen:
+                skipped.append(
+                    {
+                        "pack_path": str(pack_path),
+                        "reason": (
+                            f"collision: namespace {namespace!r} is served by newer pack "
+                            f"{seen[namespace]}"
+                        ),
+                    }
+                )
+                continue
+            seen[namespace] = pack_path
+            packs.append((namespace, typed, str(pack_path)))
+            if typed.instructions:
+                contracts.append(typed.instructions)
+        # Resolution ran newest-first; report in path order so output is stable across restarts.
+        packs.sort(key=lambda pack: pack[2])
+        skipped.sort(key=lambda entry: entry["pack_path"])
+        return packs, contracts, skipped
+
+    packs, contracts, skipped = _mount()
+    mounted_at: dict[str, Any] = {"fingerprint": _pack_fingerprint(), "checked": time.monotonic()}
 
     index: dict[str, dict[str, Any]] | None = None
+
+    def _remount_if_changed() -> None:
+        """Pick up Charts written after startup (e.g. by map_site) without a restart.
+
+        Throttled: the scan walks the configured roots, so it runs at most once per
+        _REMOUNT_INTERVAL_SECONDS, and only rebuilds when the set of packs or their
+        mtimes actually changed.
+        """
+        nonlocal index
+        now = time.monotonic()
+        if now - mounted_at["checked"] < _REMOUNT_INTERVAL_SECONDS:
+            return
+        mounted_at["checked"] = now
+        fingerprint = _pack_fingerprint()
+        if fingerprint == mounted_at["fingerprint"]:
+            return
+        fresh_packs, fresh_contracts, fresh_skipped = _mount()
+        packs[:] = fresh_packs
+        contracts[:] = fresh_contracts
+        skipped[:] = fresh_skipped
+        mounted_at["fingerprint"] = fingerprint
+        index = None
 
     async def _load_index() -> dict[str, dict[str, Any]]:
         """``operation_id -> how to reach it``, across every mounted Chart, built on first use.
@@ -3217,6 +3454,7 @@ def create_server(*, auth: AuthProvider | None = None) -> FastMCP:
         the argument contract has one source of truth rather than a second copy here.
         """
         nonlocal index
+        _remount_if_changed()
         if index is not None:
             return index
         by_namespace = {namespace: typed for namespace, typed, _ in packs}
@@ -3369,6 +3607,7 @@ def create_server(*, auth: AuthProvider | None = None) -> FastMCP:
         Skipped packs are reported here rather than only on stderr: an operator who
         configured twelve Charts and sees ten must be able to find out which two and why.
         """
+        _remount_if_changed()
         return json.dumps(
             {
                 "charts": {
@@ -3388,6 +3627,7 @@ def create_server(*, auth: AuthProvider | None = None) -> FastMCP:
         ``astrolabe://health``, which is where an agent looks to tell a self-healed
         refresh from one that still needs the operator.
         """
+        _remount_if_changed()
         return json.dumps(
             {
                 namespace: await _chart_resource(typed, "astrolabe://health")
