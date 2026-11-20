@@ -334,7 +334,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'browser-auth'", specifier = ">=43" },
     { name = "curl-cffi", specifier = ">=0.7" },
     { name = "fastmcp", specifier = ">=4.0.10,<5" },
-    { name = "graphql-core", specifier = ">=3.2,<4" },
+    { name = "graphql-core", specifier = ">=3.2.12,<4" },
     { name = "h11", specifier = ">=0.16,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.23" },
