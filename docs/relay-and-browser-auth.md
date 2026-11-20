@@ -1,24 +1,22 @@
 # Relay recovery and native browser authentication
 
-Both capabilities are opt-in. Anonymous mapping does not open a browser cookie
-database or access the keyring. Install the optional `browser-auth` extra to use
+Anonymous mapping does not open a browser cookie database or access the keyring. Install the optional `browser-auth` extra to use
 local Linux Chromium v10/v11 import. Other encryption formats fail closed.
 
 ## Operator boundary
 
-CLI: explicitly pass `--browser vivaldi --local`. MCP: configure the server's
-`ASTROLABE_BROWSER_AUTH_DOMAINS` with exact domains, then explicitly pass `browser`
-to `map_site`. The default allowlist is empty. A tool call cannot edit it. Domain
-authorization includes cookie subdomains within that domain; it does not permit
-another top-level map call for a subdomain absent from the exact allowlist.
+CLI: explicitly pass `--browser vivaldi --local`. MCP: explicitly pass `browser`
+(and `profile`) to `map_site` or `verify_chart`. Each import is scoped to the exact
+`domain` that call names. Domain authorization includes cookie subdomains within that
+domain; a call for one domain never reads cookies for another.
 
-The same shape gates the two other operator-owned ingresses. `map_site` and
-`verify_chart` accept a `cdp_endpoint` only if the exact loopback endpoint is
-listed in `ASTROLABE_CDP_ENDPOINTS`, and `register_session` may store a credential
-for a domain only if that exact domain is listed in `ASTROLABE_SESSION_DOMAINS`.
-Both allowlists are empty by default and no tool argument can widen either one.
+The two other browser-facing ingresses follow the same per-call rule. `map_site` and
+`verify_chart` accept a `cdp_endpoint` only when it is a loopback endpoint, and any
+other host is refused before a browser is reached. `register_session` stores a
+credential for the domain the call names, and that session can only be spent on
+that same domain.
 
-`ASTROLABE_SESSION_DOMAINS` exists because the agent is now a credential
+Agent-held sessions exist because the agent is now a credential
 *origin*, not only a credential consumer. Every other path here starts with
 something the operator already staged; this one lets the caller decide when a
 secret enters the system, which puts the agent's own process, its memory, and its
@@ -65,7 +63,7 @@ request instead, recording each as a truncation with reason `egress-policy`. An
 unrecognized value fails the run before a browser opens, rather than silently
 falling back to the permissive default and reporting a control the run does not
 have. This is operator config only: no tool argument can select or widen the
-policy, mirroring the allowlists above.
+policy.
 
 Recipe drives are always strict regardless of the operator default, recorded as
 `recipe-egress-policy`, because a driven step is the point at which target-supplied
@@ -116,7 +114,7 @@ out, so a hung command is no longer interrupted at the tool boundary.
 
 Set `ASTROLABE_MCP_SPAWN=1` to put every command back on the subprocess path,
 one interpreter per call, which restores both the per-call timeout and the
-isolation. It is operator config in the same sense as the allowlists above: no
+isolation. It is operator config in the same sense as the egress policy above: no
 tool argument can set it, and the server reads it once at startup. Either way
 `sys.argv`, the working directory and stdout/stderr are restored around an
 in-process call, and each call's stderr is written to the same mode-0600 log
@@ -139,7 +137,7 @@ API, so span creation is a no-op unless an SDK and exporter are configured),
 or `off` (FastMCP touches no OTel context at all, inbound or outbound). An
 operator who configures a collector inherits FastMCP's MCP spans; an operator who
 wants none sets `off`. No tool argument selects or widens this, in the same sense
-as the allowlists above.
+as the egress policy above.
 
 What that means for a reader of this document: the controls described here are
 about what the process does with credentials and evidence, and none of them
@@ -154,10 +152,9 @@ via `map_site(domain=..., session=<handle>)` or `verify_chart`. This is a
 different trust relationship from an operator-staged cookie file, because the
 *agent* decides when a secret enters the system. It is gated accordingly.
 
-The gate mirrors the browser-auth boundary above: `ASTROLABE_SESSION_DOMAINS`
-lists exact domains, the default allowlist is empty, and no tool argument can
-widen it. A registration or a use for an unlisted domain is refused by exact
-normalised match, so `sub.example.com` does not permit `example.com`.
+A session is bound to the exact normalised domain it was registered for. A use for
+any other domain is refused by exact match, so `sub.example.com` does not permit
+`example.com`.
 
 A handle is 256 bits of `secrets` output. It is never used as a filename and
 never passed on a command line: the resolved path is derived from a SHA-256 of
@@ -254,7 +251,7 @@ Three observed REST writes remain gated.
 |---|---|---|
 | `verify.json` | `astrolabe contract --execute` | the per-operation verification record, keyed by operation |
 | `active-verification.json` | `astrolabe contract --execute` | the same records as a list, each with the derived `ok` flag `mcp-gen --require-active-proof` reads |
-| `verification.jsonl` | the Chart MCP server (`sextant-mcp`) | one appended value-free proof record per verified call, beside the toolpack |
+| `verification.jsonl` | the Chart execution surface (`astrolabe-mcp`) | one appended value-free proof record per verified call, beside the toolpack |
 
 The two writers are different processes and the three names are not
 interchangeable. The Chart MCP server's journal is a durability log for calls

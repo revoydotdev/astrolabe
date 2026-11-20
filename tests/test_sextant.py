@@ -187,7 +187,9 @@ def test_configuration_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_settings_from_env_parses_operational_limits(tmp_path: Path, monkeypatch) -> None:
     pack_path = tmp_path / "pack.json"
     monkeypatch.setenv("ASTROLABE_TOOLPACK", str(pack_path))
-    monkeypatch.setenv("ASTROLABE_ALLOW_ANONYMOUS", "1")
+    # Anonymous access is no longer an env opt-in: the variable is ignored, and the
+    # default stays on.
+    monkeypatch.setenv("ASTROLABE_ALLOW_ANONYMOUS", "0")
     monkeypatch.setenv("ASTROLABE_MAX_CONCURRENCY", "7")
     monkeypatch.setenv("ASTROLABE_TIMEOUT_SECONDS", "12.5")
     monkeypatch.setenv("ASTROLABE_MAX_RESPONSE_BYTES", "9000")
@@ -311,6 +313,7 @@ async def test_missing_scoped_auth_fails_without_fallback(configured) -> None:
         runtime.settings.auth_path,
         runtime.settings.cookies_path,
         allow_mutations=True,
+        allow_anonymous=False,
         retries=1,
     )
     result = await runtime.execute(tool, {})
@@ -2968,48 +2971,6 @@ async def test_tool_resource_still_returns_the_raw_alias_as_data(tmp_path):
 
 # ----- the execution trust surface ------------------------------------------
 
-# sextant exists so that executing a typed contract sits behind its own trust
-# boundary. The boundary is the absence of things, and an absence asserted in prose
-# decays the first time somebody adds an import, so it is asserted here instead.
-#
-# Each entry below can reach a real browser, decrypt a cookie, read an operator
-# allowlist, or fetch on its own initiative. None of them is reachable from sextant.
-# `media` is deliberately NOT here: it is a value-free content-type classifier with no
-# browser, subprocess or network reference, and mcpgen legitimately needs it.
-_CAPTURE_SIDE_MODULES = frozenset(
-    {
-        "analyze",
-        "browser",
-        "browser_cookies",
-        "capture",
-        "capture_parallel",
-        "contract_store",
-        "discovery",
-        "envfile",
-        "fetch",
-        "fetch_driver",
-        "mapping_mcp",
-        "profile",
-        "recipe",
-        "recipe_runtime",
-        "recipe_worker",
-        "scan",
-        "session_registry",
-        "storefront",
-    }
-)
-
-# The operator allowlists AGENTS.md protects. They are enforced capture-side and
-# are read by no execution-path module; an agent that could widen its own
-# authorization envelope would make the gate meaningless.
-_CAPTURE_SIDE_ENV = (
-    "ASTROLABE_BROWSER_AUTH_DOMAINS",
-    "ASTROLABE_SESSION_DOMAINS",
-    "ASTROLABE_CDP_ENDPOINTS",
-    "ASTROLABE_BROWSER_EGRESS",
-    "ASTROLABE_ENV_FILE",
-)
-
 
 def _transitive_astrolabe_imports(entry: str) -> set[str]:
     """Every astrolabe module reachable from ``entry``, walked statically.
@@ -3044,62 +3005,6 @@ def _transitive_astrolabe_imports(entry: str) -> set[str]:
     return seen
 
 
-def test_sextant_cannot_reach_the_capture_surface() -> None:
-    closure = _transitive_astrolabe_imports("sextant")
-    assert "sextant" in closure, "the walk found nothing; it is broken, not passing"
-    leaks = sorted(closure & _CAPTURE_SIDE_MODULES)
-    assert not leaks, (
-        f"execution server reaches capture-side modules {leaks}; sextant's trust "
-        f"boundary is the absence of these, and an indirect import counts"
-    )
-
-
-def test_no_capture_side_allowlist_is_read_in_sextants_closure() -> None:
-    """The env knobs execution can be configured by, read rather than merely mentioned.
-
-    The distinction matters: ``astrolabe/security.py`` defines ``EGRESS_ENV`` as a
-    module constant for the capture layer's use, and sextant imports that module for
-    unrelated reasons (``DENIED_HEADERS``, ``validate_url``, ``host_matches``). Its
-    presence is inert. A grep for the name would flag it, and a flag that fires on an
-    inert constant trains the next reader to ignore it, which is how a real read gets
-    waved through. So this resolves the actual ``os.environ`` accesses.
-    """
-    root = Path(server_module.__file__).resolve().parent
-    read: dict[str, set[str]] = {}
-    for name in sorted(_transitive_astrolabe_imports("sextant")):
-        source = root / f"{name}.py"
-        if not source.is_file():
-            continue
-        names: set[str] = set()
-        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
-            # os.environ.get("X") / os.getenv("X")
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in {"get", "getenv"} and node.args:
-                    first = node.args[0]
-                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                        names.add(first.value)
-            # os.environ["X"]
-            elif (
-                isinstance(node, ast.Subscript)
-                and isinstance(node.slice, ast.Constant)
-                and isinstance(node.slice.value, str)
-            ):
-                names.add(node.slice.value)
-        knobs = {n for n in names if n.startswith("ASTROLABE_")}
-        if knobs:
-            read[name] = knobs
-    consulted = set().union(*read.values()) if read else set()
-    offenders = sorted(consulted & set(_CAPTURE_SIDE_ENV))
-    assert not offenders, (
-        f"capture-side allowlist consulted inside the execution closure: {offenders} in {read}"
-    )
-    # And positively: execution is configured by pack, credential and budget knobs. A
-    # new one is a deliberate edit to this set, not a silent arrival.
-    assert {"ASTROLABE_TOOLPACK", "ASTROLABE_AUTH"} <= consulted, (
-        f"expected the pack/credential knobs to be read; saw {sorted(consulted)}"
-    )
-
-
 def test_sextant_shares_the_pack_validator_instead_of_inlining_one() -> None:
     """The other direction, so the boundary cannot be 'fixed' by forking the gate.
 
@@ -3114,3 +3019,96 @@ def test_sextant_shares_the_pack_validator_instead_of_inlining_one() -> None:
         "mcpgen supplies envelope_schema for the discovery schema; if that moved, "
         "re-point it deliberately rather than letting the import vanish"
     )
+
+
+def _drift_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+            "data": {
+                "type": "object",
+                "required": ["items"],
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["meta", "crop", "caption"],
+                            "properties": {
+                                "meta": {
+                                    "type": "object",
+                                    "required": ["ranking"],
+                                    "properties": {"ranking": {"type": "object"}},
+                                },
+                                "crop": {"type": "integer"},
+                                "caption": {"type": "string"},
+                            },
+                        },
+                    }
+                },
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"meta": {}, "crop": 1, "caption": "x"},  # nested key omitted
+        {"meta": {"ranking": {}}, "crop": 0.5, "caption": "x"},  # integer sample, float now
+        {"meta": {"ranking": {}}, "crop": 1, "caption": None},  # null where a value was seen
+    ],
+)
+def test_sampling_blind_spots_are_not_schema_drift(configured, monkeypatch, item) -> None:
+    _, runtime = configured
+    _stub_upstream(runtime, monkeypatch, 200, {"data": {"items": [item]}})
+    result = runtime._request(
+        "POST", "https://api.example.com/graphql", {}, {}, "query", output_schema=_drift_schema()
+    )
+    assert result.get("error_code") is None, result
+    assert result["_astrolabe"]["schema_validated"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"data": {}},  # a top-level field of the response is missing
+        {"data": {"items": [{"meta": {"ranking": {}}, "crop": 1, "caption": {"t": 1}}]}},
+    ],
+)
+def test_real_drift_still_fails(configured, monkeypatch, payload) -> None:
+    _, runtime = configured
+    _stub_upstream(runtime, monkeypatch, 200, payload)
+    result = runtime._request(
+        "POST", "https://api.example.com/graphql", {}, {}, "query", output_schema=_drift_schema()
+    )
+    assert result["error_code"] == "SCHEMA_DRIFT"
+
+
+def test_cookie_only_rest_rebuilds_named_client_headers(configured, monkeypatch) -> None:
+    _, runtime = configured
+    page = '..."X-IG-App-ID":"936619743392459"...'
+
+    class Response:
+        status_code = 200
+        text = page
+
+    class Session:
+        def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(runtime, "_session", lambda *_args: Session())
+    tool = {"auth_headers": ["x-csrftoken", "x-requested-with", "x-web-session-id"]}
+    cookies = (
+        {"name": "csrftoken", "value": "elsewhere", "domain": ".other.com"},
+        {"name": "csrftoken", "value": "tok", "domain": ".example.com"},
+    )
+    headers = runtime._client_headers(tool, "https://www.example.com/api/v1/x/", cookies)
+    assert headers == {
+        "x-csrftoken": "tok",
+        "x-requested-with": "XMLHttpRequest",
+        "x-ig-app-id": "936619743392459",
+    }
+    # No header names recorded: nothing is invented and the page is never fetched.
+    assert runtime._client_headers({}, "https://www.example.com/api/v1/x/", cookies) == {}

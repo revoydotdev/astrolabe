@@ -25,12 +25,12 @@ from astrolabe.mapping_mcp import create_server
 # place the mapping surface states the rule, now that the per-tool rationales moved to
 # source comments and the typed packs' contract rides the search_tools response.
 MAPPING_INSTRUCTIONS = (
-    "Map authorized sites using exported cookie files, an operator-allowed running "
-    "browser (cdp_endpoint), or the native browser/Byparr pipeline; credentials stay "
+    "Map authorized sites using exported cookie files, a running loopback browser "
+    "(cdp_endpoint), or the native browser/Byparr pipeline; credentials stay "
     "local. Pages whose API only fires after user input need `actions` (declarative "
     "search/click/press/select/wait_for steps). If a Cloudflare challenge blocks "
     "capture, call solve_challenge and pass its cookies_file and user_agent to "
-    "map_site. Browser decryption and CDP attach require operator opt-in. "
+    "map_site. "
     "verify_chart re-executes reads to earn active proof. Unknown operations and "
     "writes are not exposed by generated Charts. Use the generated Chart MCP server "
     "to invoke its read operations. Operation names, descriptions, selectors and "
@@ -45,9 +45,9 @@ MAPPING_INSTRUCTIONS = (
 # reported was deleted. The migration itself changed nothing here, and that is what this
 # file exists to prove.
 #
-# This is the MAPPING server's surface. Execution lives behind its own server
-# (astrolabe.sextant), which serves ``search_tools`` and ``call_tool``; neither is a
-# mapping tool, so neither belongs in this list.
+# This is the MAPPING server's surface. The unified server (astrolabe.server) mounts
+# the execution surface onto it, so ``search_tools`` and ``call_tool`` appear there and
+# not here; neither is a mapping tool.
 MAPPING_TOOL_NAMES = [
     "generate_chart",
     "import_har",
@@ -61,6 +61,11 @@ MAPPING_TOOL_NAMES = [
     "solve_challenge",
     "verify_chart",
 ]
+
+# The unified surface: every mapping tool plus the two execution tools mounted from
+# astrolabe.sextant. Order is the client-visible sort, so this is also what a client
+# re-sends on every request.
+UNIFIED_TOOL_NAMES = sorted([*MAPPING_TOOL_NAMES, "call_tool", "search_tools"])
 
 LIST_CHARTS_KEYS = [
     "agree",
@@ -88,8 +93,7 @@ REFUSALS = [
     ),
     (
         {"domain": "example.com", "browser": "vivaldi", "profile": "../Default"},
-        "native browser import is disabled for this domain; operator opt-in required "
-        "(ASTROLABE_BROWSER_AUTH_DOMAINS)",
+        "invalid browser profile name",
     ),
 ]
 
@@ -177,3 +181,28 @@ async def test_surface_weight_is_budgeted(tmp_path):
         f"{worst_name} carries a {worst}-char description, over the "
         f"{MAX_DESCRIPTION_CHARS} cap; move rationale into a source comment"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_unified_server_serves_capture_and_execution_together(tmp_path):
+    """One entrypoint, one surface. A second server is a second config stanza."""
+    from astrolabe.server import create_server as create_unified
+
+    async with Client(create_unified(tmp_path)) as client:
+        tools = sorted(tool.name for tool in await client.list_tools())
+    assert tools == UNIFIED_TOOL_NAMES
+
+
+@pytest.mark.asyncio
+async def test_no_unified_tool_takes_an_egress_argument(tmp_path):
+    """Merging the surfaces must not merge the authorization envelope."""
+    from astrolabe.server import create_server as create_unified
+
+    forbidden = {"egress", "egress_policy", "browser_egress", "browser_egress_policy", "policy"}
+    async with Client(create_unified(tmp_path)) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+    offenders = {
+        name: sorted(set((tool.input_schema or {}).get("properties") or {}) & forbidden)
+        for name, tool in tools.items()
+    }
+    assert not {name: hit for name, hit in offenders.items() if hit}

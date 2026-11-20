@@ -26,12 +26,10 @@ ROOT = Path(__file__).resolve().parents[1]
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 SECURITY_DOC = ROOT / "docs" / "relay-and-browser-auth.md"
 
-MAPPING_TABLE_ANCHOR = "`astrolabe-mapping-mcp` exposes exactly these eleven tools:"
-# Execution is its own server (astrolabe.sextant), so its table is checked against that
-# server's live surface rather than derived as a difference against the mapping one.
-SEXTANT_TABLE_ANCHOR = (
-    "public surface is exactly two tools, and it does not grow with the number of Charts:"
-)
+MAPPING_TABLE_ANCHOR = "`astrolabe-mcp` exposes these eleven mapping tools:"
+# The execution surface is mounted on the unified server; its two-tool table is checked
+# against the live sextant surface rather than derived as a difference.
+SEXTANT_TABLE_ANCHOR = "Its public surface is two tools and does not grow with"
 PROOF_SECTION_HEADING = "## Native Instagram dogfood"
 
 # relay.py:471-479 is pinned byte-for-byte, and the reason matters more than the
@@ -149,7 +147,7 @@ def test_every_documented_proof_artifact_is_written_by_the_named_command():
     assert contract == _artifacts_written_by("contract_verify.py")
 
     sextant = (ROOT / "astrolabe" / "sextant.py").read_text(encoding="utf-8")
-    for name in _proof_table()["the Chart MCP server (`sextant-mcp`)"]:
+    for name in _proof_table()["the Chart execution surface (`astrolabe-mcp`)"]:
         assert f'"{name}"' in sextant, f"the Chart MCP server does not write {name}"
 
 

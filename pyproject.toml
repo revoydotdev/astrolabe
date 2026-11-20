@@ -41,6 +41,7 @@ Repository = "https://github.com/revoydotdev/astrolabe"
 
 [project.scripts]
 astrolabe = "astrolabe.cli:main"
+astrolabe-mcp = "astrolabe.server:main"
 sextant-mcp = "astrolabe.sextant:main_sync"
 astrolabe-mapping-mcp = "astrolabe.mapping_mcp:main"
 

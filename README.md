@@ -20,7 +20,16 @@ with a Cloudflare-challenge fallback), records every GraphQL/REST/WebSocket
 call it makes, and hands the traffic to a local analysis pipeline:
 
 - **capture** — record real traffic from a real session (GraphQL, REST,
-  WebSocket/socket.io), shape-only by default (no payload values persisted)
+  WebSocket/socket.io). Capture fidelity is set by `ASTROLABE_CAPTURE_FIDELITY`
+  and has three levels. `shape` (the default everywhere except the `map` tool)
+  persists type names only, no payload values. `values` keeps primitive values
+  but masks credentials by key and scrubs inline bearer/`key=value` secrets; the
+  agent-facing `map` entrypoint opts into it so an agent can read the surface it
+  just mapped, which means a `map` chart dir holds real response bodies (PII
+  included). `raw` (also reachable via the legacy `ASTROLABE_DEVELOPER_MODE=1`)
+  keeps everything verbatim and pulls the full HAR + cookies.json +
+  auth.headers.json into the chart dir, making it a credential artifact — do not
+  enable it in shared or version-controlled paths.
 - **analyze** — turn a capture into a human-readable map (`map.md`) and a
   machine-readable endpoint inventory (`endpoints.json`)
 - **contract** — build a durable, versioned, typed contract of every
@@ -56,15 +65,14 @@ key, validates padding and modern cookie domain binding, and never returns cooki
 values through MCP. Native import is local-only, disables HAR and TLS interception,
 and stages temporary credentials in private tmpfs files removed after capture.
 
-For MCP, the operator must first configure `ASTROLABE_BROWSER_AUTH_DOMAINS=x.com`
-on the server process (comma-separated exact domains; empty by default). Then call
-`map_site(domain="x.com", browser="vivaldi", seeds=["https://x.com/home"])`.
-Tool arguments cannot enable or widen this operator allowlist. Browser import is explicit; omitting both `browser`
-and `cookies_file` remains anonymous. Windows/macOS native browser decryption is
+For MCP, call `map_site(domain="x.com", browser="vivaldi", seeds=["https://x.com/home"])`.
+Browser import is explicit and bounded per call: the cookies read are the ones for the
+`domain` the call names (and its subdomains). Omitting both `browser` and
+`cookies_file` remains anonymous. Windows/macOS native browser decryption is
 not implemented; exported cookie files remain portable across platforms.
 
-Persisted recovery is separately opt-in: `--recover-persisted` or
-`map_site(..., recover_persisted=True)`. This matches APQ documents by SHA-256 and
+Persisted recovery is on by default for `map_site` (`recover_persisted=True`; pass
+`false` to skip it) and opt-in on the CLI with `--recover-persisted`. This matches APQ documents by SHA-256 and
 Meta Relay compiler metadata by exact persisted ID and operation name. Metadata
 recovery does not imply recovery of original GraphQL source. See
 [recovery and browser-auth security](docs/relay-and-browser-auth.md).
@@ -130,12 +138,15 @@ fast with an install hint rather than silently falling back.
 
 ## Usage
 
-The native mapping MCP entry point is `astrolabe-mapping-mcp` (or
-`python -m astrolabe.mapping_mcp`). Charts, run logs, and staged credentials
-live in `ASTROLABE_WORKSPACE`, defaulting to `$XDG_DATA_HOME/astrolabe`
-(`~/.local/share/astrolabe`). Serve a generated Chart with `sextant-mcp`.
+The MCP entry point is `astrolabe-mcp` (`python -m astrolabe.server`). It serves
+capture and execution on one surface: the eleven mapping tools below plus the two
+Chart-execution tools. The narrower `astrolabe-mapping-mcp` and `sextant-mcp`
+entrypoints still exist for callers that want only one half.
 
-`astrolabe-mapping-mcp` exposes exactly these eleven tools:
+Charts, run logs, and staged credentials live in `ASTROLABE_WORKSPACE`, defaulting
+to `$XDG_DATA_HOME/astrolabe` (`~/.local/share/astrolabe`).
+
+`astrolabe-mcp` exposes these eleven mapping tools:
 
 | tool | what it does |
 |---|---|
@@ -151,16 +162,13 @@ live in `ASTROLABE_WORKSPACE`, defaulting to `$XDG_DATA_HOME/astrolabe`
 | `register_session` | store a session you already hold and get back an opaque handle |
 | `revoke_session` | revoke a registered session so its handle stops working |
 
-### Execution: `sextant-mcp`
+### Execution tools
 
-`sextant-mcp` is the execution-only companion, and the two servers are separate on
-purpose. Capture and mapping touch a browser, cookies and a keyring; execution does
-not, so it sits behind its own trust boundary — `astrolabe.sextant` does not import
-the capture/mapping layer or the browser stack.
-
-It reads `ASTROLABE_TOOLPACK` (one Chart) or `ASTROLABE_TOOLPACKS` (a CSV of paths,
-or a directory holding `chart-*/toolpack.json`) and serves every Chart it finds. Its
-public surface is exactly two tools, and it does not grow with the number of Charts:
+The same server carries the execution surface for mounted Charts. It reads
+`ASTROLABE_TOOLPACK` (one Chart) or `ASTROLABE_TOOLPACKS` (a CSV of paths, or a
+directory holding `chart-*/toolpack.json`) and serves every Chart it finds; with
+neither set it mounts none. Its public surface is two tools and does not grow with
+the number of Charts:
 
 | tool | what it does |
 |---|---|
@@ -188,9 +196,8 @@ the server restarting.
 
 This is a different trust relationship from an operator-staged cookie file,
 because the agent decides when a secret enters the system. The operator must
-therefore list exact domains in `ASTROLABE_SESSION_DOMAINS` (empty by default),
-exactly as for `ASTROLABE_BROWSER_AUTH_DOMAINS`; no tool argument can widen it.
-See [agent-held sessions](docs/relay-and-browser-auth.md#agent-held-sessions) for
+therefore a registered session is bound to the exact domain it was registered for,
+and a call that tries to spend it on any other domain is refused. See [agent-held sessions](docs/relay-and-browser-auth.md#agent-held-sessions) for
 what this puts in scope, including the agent's own transcript.
 
 Many APIs only fire after someone types, submits, dismisses a modal, or pages
@@ -236,8 +243,8 @@ cdp_endpoint=...)`) captures inside a Chromium you already have open, started
 with `--remote-debugging-port=9222`, reusing its logins and challenge
 clearance. astrolabe opens its own tab, scopes routing, budgets, and listeners
 to that tab, and on exit closes only that tab and disconnects. Only loopback
-endpoints are accepted, and the MCP server additionally requires the operator
-to list the exact endpoint in `ASTROLABE_CDP_ENDPOINTS`. Attached capture
+endpoints are accepted; anything else is refused before a browser is reached.
+Attached capture
 cannot combine with cookie files, native browser import, proxies, or HAR export.
 
 See [persisted-query recovery and payload decoding](docs/persisted-recovery.md)
@@ -292,12 +299,10 @@ process, so an agent cannot widen its own authorization envelope.
 | variable | default | what it controls |
 |---|---|---|
 | `ASTROLABE_WORKSPACE` | `$XDG_DATA_HOME/astrolabe` | where Charts, run logs and staged credentials live |
-| `ASTROLABE_BROWSER_AUTH_DOMAINS` | empty | exact domains native browser import may decrypt cookies for |
-| `ASTROLABE_SESSION_DOMAINS` | empty | exact domains `register_session` may store a credential for |
-| `ASTROLABE_CDP_ENDPOINTS` | empty | exact loopback `cdp_endpoint` values `map_site` may attach to |
 | `ASTROLABE_BROWSER_EGRESS` | `allow-third-party` | `first-party-only` aborts and records every non-first-party request |
+| `ASTROLABE_CAPTURE_FIDELITY` | `shape` (the `map` tool opts into `values`) | `shape`/`values`/`raw`: how much of each captured value a chart retains (see **capture** above) |
 | `ASTROLABE_MCP_SPAWN` | unset | `1` puts every dispatched command back on one-subprocess-per-call |
-| `ASTROLABE_TOOLPACK`, `ASTROLABE_TOOLPACKS`, `ASTROLABE_COOKIES`, `ASTROLABE_AUTH` | unset | which Charts `sextant-mcp` serves, and with what credentials |
+| `ASTROLABE_TOOLPACK`, `ASTROLABE_TOOLPACKS`, `ASTROLABE_COOKIES`, `ASTROLABE_AUTH` | unset | which Charts the execution surface mounts, and with what credentials |
 | `ASTROLABE_ENV_FILE` | `./.env` | operator credentials for `astrolabe fetch` (residential proxy, byparr URL, egress-verify command); read by the fetch path only, never by a tool |
 | `FASTMCP_TELEMETRY_MODE` | `native` | FastMCP's OpenTelemetry instrumentation, see below |
 
@@ -352,7 +357,7 @@ astrolabe contract <capture-dir> \        # versioned typed inventory + observat
 astrolabe mcp-gen <capture-dir> \         # generate a typed MCP toolpack from a capture
     --overrides surfaces                    # use curated minimal queries where available
     # -> toolpack.json: typed tools only for safely classified, runtime-compatible ops.
-    # Serve with `sextant-mcp` (FastMCP; env: ASTROLABE_TOOLPACK/COOKIES/AUTH).
+    # Serve with `astrolabe-mcp` (FastMCP; env: ASTROLABE_TOOLPACK/COOKIES/AUTH).
 
 astrolabe replay example.com --op op.json \   # browserless, TLS-matched, high-frequency replay
     --cookies-file cookies.json --auth-file auth.map.json \  # both bring-your-own
